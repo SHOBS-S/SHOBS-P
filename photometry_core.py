@@ -7587,7 +7587,7 @@ COMP_NIGHT_SHARE = 0.5
 NIGHT_SET_MIN = 2        # fewer comps than this left for a night is worth a ⚠ (one comp has no cross-check)
 
 
-def night_set(m: np.ndarray, over=None, rows=None) -> dict:
+def night_set(m: np.ndarray, over=None, rows=None, soft=None) -> dict:
     """2.4.0 fit-in F4 (#79 item 4): the one comp set of a night from m (frames x comps instrumental magnitudes, NaN
     = not measured in that frame). over: optional frames x comps booleans (raw peak at or over the linear limit).
 
@@ -7596,14 +7596,22 @@ def night_set(m: np.ndarray, over=None, rows=None) -> dict:
     is over the limit in none. When that leaves no comp at all (every comp is missing somewhere), the comps
     measured in the most frames are kept ("few") and the frames without them get no comparison.
     Returns {"keep": [column numbers], "missing": {column: frames missing}, "over": {column: frames over},
-    "few": [columns kept although not in every frame], "frames": the frames that count}."""
+    "few": [columns kept although not in every frame], "frames": the frames that count}.
+    F4 review S1: soft (frames x comps booleans) marks a comp missing from a frame for that frame's own reason (no
+    flux above sky: a cloud frame, a faint comp), not because it left the frame. Such a frame does not put the comp
+    out of the night: it stays in the set and that frame gets no comparison (as any frame without all the comps)."""
     m = np.asarray(m, dtype=float)
     if m.ndim != 2 or m.shape[0] == 0 or m.shape[1] == 0:
         return {"keep": [], "missing": {}, "over": {}, "few": [], "frames": 0}
     ok = np.isfinite(m)
     rows = ok.any(axis=1) if rows is None else (np.asarray(rows, dtype=bool) | ok.any(axis=1))
     n_rows = int(rows.sum())
-    miss = {j: int((~ok[rows, j]).sum()) for j in range(m.shape[1])}
+    lost = ~ok
+    if soft is not None:
+        sf = np.asarray(soft, dtype=bool)
+        if sf.shape == m.shape:
+            lost = lost & ~sf
+    miss = {j: int(lost[rows, j].sum()) for j in range(m.shape[1])}
     hot = {j: 0 for j in range(m.shape[1])}
     if over is not None:
         ov = np.asarray(over, dtype=bool)
@@ -7623,15 +7631,25 @@ def night_set(m: np.ndarray, over=None, rows=None) -> dict:
             "over": {j: c for j, c in hot.items() if c}, "few": few, "frames": n_rows}
 
 
-def night_set_reason(missing: int, over: int, frames: int) -> str:
-    """2.4.0 fit-in F4: why a comp is out for the night, in plain words."""
+def night_set_reason(missing: int, over: int, frames: int, edge: bool = True) -> str:
+    """2.4.0 fit-in F4: why a comp is out for the night, in plain words. F4 review S1: edge=False when SHOBS-P has no
+    reason on file for the missing frames (a night reduced before 2.3.0): it does not say the star left the frame."""
     parts = []
-    if missing:
+    if missing and edge:
         parts.append(f"missing from {missing} of {frames} frame{'s' if frames != 1 else ''} (off the frame or "
                      "its edge)")
+    elif missing:
+        parts.append(f"not measured in {missing} of {frames} frame{'s' if frames != 1 else ''}")
     if over:
         parts.append(f"over the linear limit in {over} frame{'s' if over != 1 else ''}")
     return " and ".join(parts)
+
+
+def _edge_drop_reason(reason: str) -> bool:
+    """F4 review S1: a comp_drop reason that means the comp left the frame (aperture_clip_reason and
+    reduce_frame's outside-the-frame words), not a reason of that frame alone (no flux above sky)."""
+    r = str(reason or "").lower()
+    return "edge" in r or "outside the frame" in r or "off the frame" in r
 
 
 def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str], aliases: dict | None = None,
@@ -7671,8 +7689,25 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
                     over[f, j] = v is not None and math.isfinite(float(v)) and float(v) >= float(linear_limit)
                 except (TypeError, ValueError):
                     pass
-    ns = night_set(m, over, rows=[math.isfinite(o.target_inst) for o in points])
-    why = {sel[j]: night_set_reason(ns["missing"].get(j, 0), ns["over"].get(j, 0), ns["frames"])
+    # F4 review S1: why each comp is missing from each frame (Obs.comp_drop, 2.3.0 on): a frame's own reason (no
+    # flux) is "soft" and never puts the comp out of the night; no reason on file = an older night
+    soft = np.zeros(m.shape, dtype=bool)
+    unknown = np.zeros(m.shape, dtype=bool)
+    for f, o in enumerate(points):
+        drops = getattr(o, "comp_drop", None) or {}
+        for j, name in enumerate(sel):
+            if math.isfinite(m[f, j]):
+                continue
+            r = next((drops.get(k) for k in [name] + list((aliases or {}).get(name, ())) if drops.get(k)), None)
+            if r is None:
+                unknown[f, j] = True
+            elif not _edge_drop_reason(r):
+                soft[f, j] = True
+    rows = [math.isfinite(o.target_inst) for o in points]
+    ns = night_set(m, over, rows=rows, soft=soft)
+    rws = np.asarray(rows, dtype=bool) | np.isfinite(m).any(axis=1) if n else np.zeros(0, dtype=bool)
+    why = {sel[j]: night_set_reason(ns["missing"].get(j, 0), ns["over"].get(j, 0), ns["frames"],
+                                    edge=not bool((unknown[rws, j]).any()))
            for j in set(ns["missing"]) | set(ns["over"]) if j not in ns["keep"]}
     out = [name for name in sel if name in why]
     few = [sel[j] for j in ns["few"]]
@@ -9857,7 +9892,7 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         # point's z^2 / 0.4549, the median of chi2 with one degree of freedom; never narrowed), so the cap is 5 sigma
         # of the field's real noise at that brightness. Retuned on the 13-14 Nov (97 frames) and quiet 8-9 Nov
         # GSC 03308-00462 nights: S033 2.89 -> 2.69 (still a Suspect at 2.5), 8 Nov unchanged (S033 0.91).
-        judged = corrected
+        judged, med_j = corrected, med
         edge_n = np.zeros(n_stars, dtype=int)
         if near_edge is not None:
             ne = np.asarray(near_edge, dtype=bool)
@@ -9865,8 +9900,19 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
                 raise ValueError("the frame-edge table does not match the magnitudes")
             edge_n = np.sum(ne & np.isfinite(corrected), axis=0).astype(int)
             judged = np.where(ne, np.nan, corrected)
-        sigma = sigma * chi2_widening(judged, med, sigma, usable, exclude)[None, :]
-        chi2 = chi2nu_against_errors(judged, med, sigma)
+            # F4 review M1: the judged points are taken about their OWN median (the median of all points sits among
+            # the edge values once a star spends half the night or more at the edge, which made it look variable);
+            # and a star is not judged by its own errors on a handful of points (under 10, or under a third of its
+            # points): its caution says to look at the curve instead
+            n_all = np.sum(np.isfinite(corrected), axis=0)
+            n_j = np.sum(np.isfinite(judged), axis=0)
+            few = (n_j < 10) | (n_j * 3 < n_all)
+            judged = np.where(few[None, :], np.nan, judged)
+            with np.errstate(all="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                med_j = np.where(edge_n > 0, np.nanmedian(judged, axis=0), med)
+        sigma = sigma * chi2_widening(judged, med_j, sigma, usable, exclude)[None, :]
+        chi2 = chi2nu_against_errors(judged, med_j, sigma)
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
             out["excess_chi2"] = chi2 / chi2_expected
@@ -10463,7 +10509,8 @@ def scan_cautions(result: dict, i: int) -> list[str]:
         out.append("blended neighbor: check")
     edge = (result.get("edge_points") or {}).get(i)   # 2.4.0 fit-in F4 (#115 edge rule)
     if edge:
-        out.append(f"at the frame edge on {edge} frame{'s' if edge != 1 else ''} (not judged by its own errors "
+        unit = "stack" if (result.get("suspects_where") or {}).get("points") == "stacks" else "frame"   # review nit
+        out.append(f"at the frame edge on {edge} {unit}{'s' if edge != 1 else ''} (not judged by its own errors "
                    "there): check its light curve")
     vsx = result.get("vsx")
     hit = vsx[i] if vsx is not None and i < len(vsx) else None

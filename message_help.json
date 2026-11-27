@@ -234,6 +234,14 @@
   {
    "section": "Input",
    "patterns": [
+    "Could not read the first light: …. Check the file opens in another program, set it aside if it is damaged, then press Scan folders again.",
+    "Could not read the first light (…): press Scan folders."
+   ],
+   "todo": "Open it in another program; if it is damaged, move it out of the folder and press Scan folders again."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Could not look up … (…). Type RA/Dec, or let the plate solution fill them, or press Look up again."
    ],
    "todo": "Check the spelling (the Input page may suggest the AAVSO spelling: Use it), or type RA/Dec."
@@ -837,6 +845,27 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Too few stars found on the reference frame to align frames. Positions will not follow drift. Use a frame with more stars as the reference (reject this one on the Blink page), or check the focus and exposure."
+   ],
+   "todo": "Reject that frame on the Blink page so the next one becomes the reference, or check the focus and exposure."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Photometry stopped by an error (…). Nothing was added to the series. Press Run photometry again; if it stops again, send the log file (Show log) with a bug report."
+   ],
+   "todo": "Press Run photometry again. If it stops again, send the log file with a bug report."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comps left out of the night: the magnitudes could not be worked out again without them (…). Run photometry again; if it comes back, leave that comp out with Use comps… (Output page)."
+   ],
+   "todo": "Run photometry again; if it comes back, leave that comp out with Use comps… on the Output page."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "No flats, and the sky dominates the target's aperture: the star is only N % of the light in it (under 20 %). …"
    ],
    "todo": "Take flats for this setup. For this night, try a smaller aperture (Suggest…) and compare results with care."
@@ -1076,13 +1105,6 @@
     "✓ placed after the solve; magnitude … from the catalog (the slot had none): check it."
    ],
    "todo": "Nothing; check the magnitude when the line says so."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
-    "No catalog magnitude for … Type it in the Catalog mag column of this window (Use comps…), or untick the star."
-   ],
-   "todo": "Type it in the Catalog mag column, or untick the star."
   },
   {
    "section": "Photometry",
@@ -1876,7 +1898,8 @@
    "patterns": [
     "C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40.",
     "The night uses C1, C2 in every frame.",
-    "… over the linear limit in 3 frames."
+    "… over the linear limit in 3 frames.",
+    "… not measured in 3 of 40 frames"
    ],
    "todo": "Nothing. Pick a comp further in, or a fainter one, next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
   },

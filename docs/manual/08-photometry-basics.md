@@ -806,6 +806,8 @@ After the run, a line under the "Measured with" line lists what happened, for ex
 - *"C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40."* and
   *"The night uses C1, C2 in every frame."* A plain note: nothing to do.
 - *"C2 left out of the whole night: over the linear limit in 3 frames."*
+- A comp that gives no light above the sky on one frame (a cloud) stays in the night's set; that one frame gets
+  no comparison (2.4.0).
 - *"⚠ That leaves only C1 for the night. Add a comp that stays on the frame and under the linear limit all night
   (a spare comp with Use comps…, Output page), then press Run photometry."* The ⚠ comes only when fewer than two
   comps are left.

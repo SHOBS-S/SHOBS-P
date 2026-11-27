@@ -134,7 +134,9 @@ reads as low as 2.7 to 3.0 on the first night, depending on which frames are in.
 
 **Stars at the frame edge (2.4.0).** On the frames where a star's sky ring runs past the edge of the frame (the
 field drifted it there), the second test leaves that star's points out: it is judged by its own errors only on the
-frames where it is clear of the edge. Its scatter, its light curve and the 3 × normal test keep every point. Such a
+frames where it is clear of the edge, about its own middle value there. A star clear of the edge on fewer than 10
+frames, or on under a third of its frames, is not judged by this test at all. Its scatter, its light curve and the
+3 × normal test keep every point. Such a
 star gets the caution *at the frame edge on N frames (not judged by its own errors there): check its light curve*
 in the **Check first** column. On the first S033 night, four of the seven ordinary stars the second test listed
 were such edge stars.

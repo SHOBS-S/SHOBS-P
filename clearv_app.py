@@ -23053,7 +23053,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
                                                                   "the pre-2.2.17 error model is used."}
-        _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, all_lights or lights)   # F4 (8g)
+        _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, all_lights or lights,
+                           precalibrated=precalibrated)   # F4 (8g); review S3: never from pre-calibrated frames
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
         for key_ in ("egain_ignored", "remembered"):   # 2.4.0 fit-in F4 (m473, 8g): for the settings file's Gain line
@@ -23655,14 +23656,29 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not (0 < lo < hi):
             self._period_range_note = ""
             return lo, hi
-        got = core.period_range_follow(lo, hi, self._known_periods(), span_days)
+        known = self._known_periods()
+        got = core.period_range_follow(lo, hi, known, span_days)
         new = (got["lo"], got["hi"])
         kept = getattr(self, "_period_range_widened", None)
+        # F4 review S2: once SHOBS-P has widened the boxes for a known period and the user then changes them, his
+        # range stands for that known period (a second, shorter period of a known star must stay searchable). A new
+        # known period (another series or star) is followed again.
+        known_key = tuple(sorted((str(lab), round(float(p), 9)) for lab, p in got["widened"]))
+        own = getattr(self, "_period_range_own", None)
+        if kept and kept[0] != (lo, hi) and got["widened"] and len(kept) > 2 and kept[2] == known_key:
+            own = self._period_range_own = known_key   # the user changed the widened boxes
+            self._period_range_widened = None
+        if got["widened"] and own is not None and own == known_key:
+            what = ", ".join(f"{lab} {p:.5g} d" for lab, p in got["widened"])
+            self._period_range_note = f"searched {lo:g}–{hi:g} d as you set it: {what} is outside it or at its edge"
+            return lo, hi
+        if not got["widened"]:
+            self._period_range_own = None
         if got["widened"] and new != (lo, hi):
             self.min_period.set(new[0])
             self.max_period.set(new[1])
             note = core.period_range_note((lo, hi), new, got["widened"])
-            self._period_range_widened = (new, note)
+            self._period_range_widened = (new, note, known_key)
             self._period_range_note = note
             self.log("Period search " + note[len("searched "):] + ".", keep_status=True)
         elif kept and kept[0] == (lo, hi):
@@ -24601,6 +24617,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.after_idle(self._stack_ui_update)   # 2.3.0 (#54): a series set aside takes its stacks' switch with it
         self._holds = {}   # 2.2.19 (#24): a held night belongs to the series set aside
         self._hold_stale_logged = False
+        self._period_range_widened = self._period_range_own = None   # F4 review S2: a new series follows again
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
         self.series_path = ""
@@ -24860,6 +24877,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 new_id = str((meta or {}).get("star_id") or "").strip()
                 if new_id and name_key(new_id) != name_key(cur_id):
                     # only names that differ can lead to the m509 question; the answer waits in got[2]
+                    self.call_ui(step, "where the two names point (SIMBAD / VSX)")   # review nit: the bar says so
                     try:
                         same = self._same_star_by_lookup(cur_id, meta, cur_pos=cur_pos)
                     except Exception:
@@ -30456,11 +30474,14 @@ def _sky_gain_night(jd: float) -> str:
     return ol.night_of(jd)
 
 
-def _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, lights) -> bool:
+def _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, lights, precalibrated=False) -> bool:
     """2.4.0 fit-in F4 (#79 item 8g): after a night whose sky measured the gain, keep it for this camera (e-/ADU of
     the stored values), so a later night that cannot measure it has a better fallback than the one-frame lower limit.
-    Never stops a run."""
+    Never stops a run. F4 review S3: not from pre-calibrated lights (their values may be rescaled, so the use side
+    never takes a remembered gain for them either)."""
     try:
+        if precalibrated:
+            return False
         if not (meas and meas.get("ok")) or (setup or {}).get("sky_method") != "measured":
             return False
         sg = _sky_gain_mod()

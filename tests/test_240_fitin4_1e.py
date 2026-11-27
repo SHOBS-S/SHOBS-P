@@ -291,7 +291,7 @@ class TestSweepWording(unittest.TestCase):
                 "Choose another folder",                                            # m617
                 "Check RA/Dec on the Input",                                        # x074
                 "Click it by hand to measure it anyway",                            # m203
-                "Catalog mag column of this window",                                # m549
+                "mag column, or untick ",                                          # m549 (merge: F4-2 words)
                 "Aperture test not done",                                           # m241
                 "COLOR_FIT_FAILED",                                                 # m422, m428
                 "type it in the Optics ",                                           # x042

@@ -278,6 +278,9 @@ class RememberedGain(unittest.TestCase):
         self.assertFalse(ca._sky_gain_remember(self.HEAD, {"sky_method": "lower limit"}, {"ok": False}, 1, "MONO",
                                                "mono", None, []))
         self.assertFalse(ca._sky_gain_remember(None, None, None, 1, "MONO", "mono", None, None))
+        # F4 review S3: never from pre-calibrated lights
+        self.assertFalse(ca._sky_gain_remember(self.HEAD, setup, self.MEAS, 1, "MONO", "mono", None, [],
+                                               precalibrated=True))
 
 
 class EgainOverTwoTimesOff(unittest.TestCase):

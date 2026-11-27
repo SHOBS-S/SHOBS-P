@@ -35,13 +35,20 @@ def _obs(f, comps, target=-9.2, night="N", peaks=None, kmag=None):
     return o
 
 
+def _edge(pts, names=("A", "B", "C")):
+    """F4 review S1: a comp missing from a frame says why (Obs.comp_drop, 2.3.0 on): here, off the frame edge."""
+    for o in pts:
+        o.comp_drop = {n: "off the frame edge" for n, v in zip(names, o.comp_insts) if v != v}
+    return pts
+
+
 NAMES = ["A", "B", "C"]
 CAT = {"A": 10.0, "B": 10.5, "C": 11.4}
 
 
 class TestOneCompSetPerNight(unittest.TestCase):
     def test_comp_off_the_frame_in_one_frame_is_out_all_night(self):
-        pts = [_obs(f, [-9.0, -8.5, -7.6 if f != 17 else float("nan")]) for f in range(40)]
+        pts = _edge([_obs(f, [-9.0, -8.5, -7.6 if f != 17 else float("nan")]) for f in range(40)])
         r = core.recompute_with_comps(pts, NAMES, NAMES, CAT)
         self.assertEqual(r["night_out"], {"N": ["C"]})
         self.assertEqual(r["night_use"], {"N": ["A", "B"]})
@@ -74,7 +81,7 @@ class TestOneCompSetPerNight(unittest.TestCase):
         self.assertEqual({o.n_comps for o in pts if o.night == "N2"}, {3})
 
     def test_lines_plain_until_too_few_comps_are_left(self):
-        pts = [_obs(f, [-9.0, -8.5, -7.6 if f else float("nan")]) for f in range(12)]
+        pts = _edge([_obs(f, [-9.0, -8.5, -7.6 if f else float("nan")]) for f in range(12)])
         r = core.recompute_with_comps(pts, NAMES, NAMES, CAT)
         lines = core.night_out_lines(r)
         self.assertEqual(len(lines), 1)
