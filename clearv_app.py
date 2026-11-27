@@ -28732,13 +28732,27 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # 2.2.19 (r2: S4): the worker writes from a snapshot taken here, so Use comps, catalog magnitudes or
             # Remove night recomputing the observations in place while it writes cannot mix old and new rows.
             import copy
-            obs, notes, scint = copy.deepcopy(obs), copy.deepcopy(notes), copy.deepcopy(scint)
-            # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's frame-label
-            # column reads the frame folders' headers); the whole series when no night is highlighted, as before.
-            self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint),
-                                     f"light-curve CSV ({len(obs)} points, {self._scope_words(scope)})")
+            # 2.4.0 fit-in F4 (#100 item 4, #116): the snapshot has to be taken on the window's own thread, and on
+            # a long series it takes a second or two: the busy bar is up before it starts, not only once the
+            # worker has run for a moment.
+            what = f"light-curve CSV ({len(obs)} points, {self._scope_words(scope)})"
+            tok = None
+            if len(obs) >= self.CSV_BAR_POINTS:
+                tok = self.busy_begin(f"Saving the {what}…")
+                self._busy_show_now()
+            try:
+                obs, notes, scint = copy.deepcopy(obs), copy.deepcopy(notes), copy.deepcopy(scint)
+                # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's
+                # frame-label column reads the frame folders' headers); the whole series when no night is
+                # highlighted, as before.
+                self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint), what)
+            finally:
+                if tok is not None:
+                    self.busy_end(tok, soon=True)   # the worker's own bar takes over without a flicker
             self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
         return path or ""
+
+    CSV_BAR_POINTS = 2000   # Save light-curve CSV: from this many points the busy bar is up before the snapshot
 
     def _save_in_background(self, path: str, write, what: str, asked: bool = True):
         """2.2.19 (nit): run write() (no Tk, no on-screen figure) in a worker thread. A save that is done within a
