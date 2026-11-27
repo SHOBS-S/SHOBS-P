@@ -383,8 +383,10 @@ class StackMixin:
         if self.stack_n.get().strip() != str(n):
             self.stack_n.set(str(n))
         if len(kept) < 2:
+            # 2.4.0 fit-in F4 (sheet sweep, m729): says what to do
             messagebox.showerror(TITLE, "Fewer than 2 frames can be stacked (the others are flagged, or could not be "
-                                        "aligned).")
+                                        "aligned). Use the per-frame points, or un-flag frames on the Output page "
+                                        "(Leave flagged points out) and press Stack again.")
             return
         try:
             binning = max(int(self.binning.get()), 1)
@@ -537,12 +539,15 @@ class StackMixin:
         if cancelled or run is None:
             self._discard_job_findings()   # 2.4.0 (#102, review S1/S2): its ⚠ go; the ✖ stop line below stays
             self._progress_end("Canceled." if not error else "Stopped by an error.")
+            # 2.4.0 fit-in F4 (sheet sweep, m741): the error line says what to do
             self.log(("✖ " if error else "") + "Photometry on the stacks " + (f"stopped by an error ({error})" if error else "canceled")
-                     + "; the points stay per frame.")
+                     + "; the points stay per frame." + (" Press Stack to try again." if error else ""))
             return
         self._progress_end(f"{len(night_points)} stacked points.")
         if not night_points:
-            messagebox.showerror(TITLE, "No stack produced a magnitude (the Log says why). The points stay per frame.")
+            # 2.4.0 fit-in F4 (sheet sweep, m742): says what to do
+            messagebox.showerror(TITLE, "No stack produced a magnitude (the Log says why). The points stay per frame.\n\n"
+                                        "Try a smaller Stack N, or carry on with the per-frame points.")
             return
         night = run["night"]
         filt = self._filter_code()

@@ -2252,6 +2252,20 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
+    "The health check needs at least two stars (two comps, or a comp and a check star). Mark a second comp or a check star on the Photometry page and run photometry again."
+   ],
+   "todo": "Mark a second comp or a check star and run photometry again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Airmass check of the period not done (…). The period stands as found, without that check."
+   ],
+   "todo": "Nothing. If it happens every time, send the log file."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
     "No catalog magnitude for …. Type its magnitude in the Catalog mag column, or untick that star."
    ],
    "todo": "Type one in the table, or untick the star."
@@ -2787,9 +2801,24 @@
   {
    "section": "Discovery mode",
    "patterns": [
-    "Fewer than 8 stars found in the frame; a field scan needs more."
+    "Fewer than 8 stars found in the frame; a field scan needs more. Lower the Detection threshold (σ) in Scan settings, and check that the frame is calibrated and in focus."
    ],
    "todo": "Check focus and exposure, or lower Detection threshold (σ)."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Fewer than 2 frames can be stacked (the others are flagged, or could not be aligned). Use the per-frame points, or un-flag frames on the Output page (Leave flagged points out) and press Stack again."
+   ],
+   "todo": "Work with the per-frame points, or keep more frames and press Stack again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "No stack produced a magnitude (the Log says why). The points stay per frame. Try a smaller Stack N, or carry on with the per-frame points.",
+    "Photometry on the stacks stopped by an error (…); the points stay per frame. Press Stack to try again."
+   ],
+   "todo": "Read the Log line above it; try a smaller Stack N, or use the per-frame points."
   },
   {
    "section": "Discovery mode",

@@ -19118,7 +19118,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 n_s += 1
                 labels.append(f"S{n_s:03d}")
         if len(xy) < 8:
-            messagebox.showinfo(APP_TITLE, "Fewer than 8 stars found in the frame; a field scan needs more.")
+            # 2.4.0 fit-in F4 (sheet sweep, m354): says what to do
+            messagebox.showinfo(APP_TITLE, "Fewer than 8 stars found in the frame; a field scan needs more. Lower "
+                                           "the Detection threshold (σ) in Scan settings, and check that the frame "
+                                           "is calibrated and in focus.")
             return
         # 2.2.19 (#26): stars kept with a neighbor (box unticked, or watched stars) get a "blended neighbor" caution.
         blended = []
@@ -22555,10 +22558,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         elif self.series_path:
             path = os.path.join(os.path.dirname(self.series_path), core.extremum_csv_name(star))
         else:
-            try:
-                folder = self._out_folder()
-            except Exception:
-                folder = ""
+            folder = self.output_dir.get().strip()   # read only: never makes the folder (as _out_folder would)
             path = os.path.join(folder, core.extremum_csv_name(star)) if folder else ""
         try:
             if not path or not os.path.exists(path):
@@ -22737,7 +22737,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception as exc:
             for key in ("night_fap", "airmass_trend", "night_means", "airmass_check"):
                 period.pop(key, None)
-            out["log"].append(f"Airmass check of the period not done ({exc}).")
+            # 2.4.0 fit-in F4 (sheet sweep, m490): says what it means for the period
+            out["log"].append(f"Airmass check of the period not done ({exc}). The period stands as found, without "
+                              "that check.")
         return out
 
     def _period_apply(self, job: dict, out: dict):
@@ -27588,7 +27590,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             )
             return
         if result.get("too_few"):
-            messagebox.showinfo(APP_TITLE, "The health check needs at least two stars (two comps, or a comp and a check star).")
+            # 2.4.0 fit-in F4 (sheet sweep, m621): says what to do
+            messagebox.showinfo(APP_TITLE, "The health check needs at least two stars (two comps, or a comp and a "
+                                           "check star). Mark a second comp or a check star on the Photometry page "
+                                           "and run photometry again.")
             return
         result["positions"] = self._star_positions(result)
         result["zero_point"] = self._zero_point_check()   # 2.2.14 (item 10)
