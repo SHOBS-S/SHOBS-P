@@ -24881,8 +24881,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ax = self.out_ax2
         cautions = []
         old_model = core.error_model_text(obs_list, lambda n: self.night_label(n, short=True))   # 2.2.17 (item 8)
-        if old_model:
-            cautions.append(old_model)
+        # 2.4.0 fit-in F4 (sheet sweep, x119): a plain line under the night table (it is on every redraw of such
+        # a series, so it does not shout); the saved plot keeps it with its other notes
+        self._output_note = old_model or ""
         period_lines = []
         self._period_range_fix = None   # 2.2.19 (#19)
         self._period_verdict = None
@@ -25273,7 +25274,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.caution_text = StringVar(value="")
         self.caution_label = ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500,
                                        justify=LEFT)
-        for var in (self.spread_text, self.caution_text):
+        # 2.4.0 fit-in F4 (sheet sweep, x119): a plain line between the two (old nights keep their old error bars)
+        self.note_text = StringVar(value="")
+        self.note_label = ttk.Label(holder, textvariable=self.note_text, style="Card.TLabel", wraplength=1500,
+                                    justify=LEFT)
+        for var in (self.spread_text, self.note_text, self.caution_text):
             var.trace_add("write", lambda *_a: self._show_summary_lines())
         self._show_summary_lines()
 
@@ -25287,6 +25292,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     spread.pack(anchor=W, pady=(2, 0), after=self._summary_table_row)
             elif spread.winfo_manager():
                 spread.pack_forget()
+            note = getattr(self, "note_label", None)
+            if note is not None:
+                if self.note_text.get().strip():
+                    if not note.winfo_manager():
+                        if caution.winfo_manager():
+                            note.pack(anchor=W, before=caution)
+                        else:
+                            note.pack(anchor=W)
+                elif note.winfo_manager():
+                    note.pack_forget()
             if self.caution_text.get().strip():
                 if not caution.winfo_manager():
                     caution.pack(anchor=W)   # last in the holder: under the spread line when both show
@@ -25556,8 +25571,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _fill_summary(self, series_lines, period_lines, color_lines, rows, cautions):
         # 2.2.3: kept so Save plot PNG can draw the same blocks above the plots.
+        note, self._output_note = getattr(self, "_output_note", ""), ""   # (x119) said by this draw only
         self._summary_snapshot = {"series": list(series_lines), "period": list(period_lines),
-                                  "color": list(color_lines), "rows": [dict(r) for r in rows], "cautions": list(cautions)}
+                                  "color": list(color_lines), "rows": [dict(r) for r in rows],
+                                  "cautions": list(cautions), "notes": [note] if note else []}
+        if hasattr(self, "note_text"):
+            self.note_text.set(note)
         self.summary_vars["series"].set("\n".join(series_lines))
         period_before = self.summary_vars["period"].get()
         self.summary_vars["period"].set("\n".join(period_lines))
@@ -25840,6 +25859,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if isinstance(entries, list):
                 have = self.reports_sent.setdefault(str(night), [])
                 have.extend(e for e in entries if isinstance(e, dict) and e not in have)
+        own_comps = ""
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
                 core.recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
@@ -25848,6 +25868,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}. Its nights keep the comps "
                          "they were saved with: open Use comps… (Output page) and press Apply to put every night "
                          "on the same comps.")   # 2.4.0 fit-in F4 (sheet sweep): says what to do
+                own_comps = (" ⚠ Its nights keep their own comps: expect an offset. Open Use comps… and press "
+                             "Apply.")   # (m530) stays on the status line, after "Added …"
         for night, info in (meta.get("color_cal") or {}).items():
             self.color_cal.setdefault(night, info)
         for night, info in (meta.get("night_binning") or {}).items():
@@ -25866,7 +25888,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except OSError as exc:
                 saved = self.series_not_saved(exc)
         nights = sorted({o.night for o in self.observations})
-        self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}")
+        self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}"
+                        + own_comps)
         self._warn_legacy(legacy, os.path.basename(path), path)
 
     def edit_night_note(self):
@@ -27598,6 +27621,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         for night_key, line in zip(sorted(zp["warn"]), zp["text"]):
             if night is None or night_key == night:
+                # (sheet row m621 asked for a plain Log copy: not done. This ⚠ line is the run's finding: it is what
+                # lists the caution in the Findings panel and opens it after the run, _run_summary.)
                 self.log("⚠ Ensemble zero point, " + self.label_nights(line))
     def show_extremum(self):
         """2.2.14 (item 13): the time of maximum / minimum window for the loaded series."""
@@ -28889,9 +28914,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         table_h = (len(rows) + 1.5) * line_in
         # 2.2.14 review: the cautions wrapped to the picture's width (one long line was clipped at the right).
         caution_lines = []
-        if snap.get("cautions"):
+        if snap.get("cautions") or snap.get("notes"):
             from transit_ui import wrap_to_width
-            for c in snap["cautions"]:
+            for c in snap.get("notes") or []:   # 2.4.0 fit-in F4 (x119): a plain note, no mark
+                caution_lines += wrap_to_width(c, 0.97 * width_in * dpi, 8, dpi=dpi)
+            for c in snap.get("cautions") or []:
                 caution_lines += wrap_to_width("! " + c, 0.97 * width_in * dpi, 8, dpi=dpi)
             caution_lines = caution_lines[:14]
         extra = (len(caution_lines) * 0.8 + 0.7 if caution_lines else 0) * line_in + 0.55

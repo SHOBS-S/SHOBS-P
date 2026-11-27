@@ -252,6 +252,38 @@ class TestWording(Base):
 
 
 @unittest.skipUnless(HAVE_TK, "needs a display")
+class TestPlainNoteAndStatus(Base):
+    def test_old_error_bars_is_a_plain_line(self):
+        app = self.app
+        app.mode_key = "variables"
+        pts = T._series(nights=2, per_night=12)
+        for o in pts:
+            o.e_model = 1 if o.night == pts[0].night else 0   # one night from before 2.2.17
+        app.observations = pts
+        app.highlight_night = None
+        app._refresh_period()
+        app.draw_output()
+        self.assertIn("keep the old, larger error bars", app.note_text.get())
+        self.assertNotIn("⚠", app.note_text.get())
+        self.assertNotIn("keep the old, larger error bars", app.caution_text.get())
+        self.assertEqual(app._summary_snapshot["notes"], [app.note_text.get()])   # the saved plot keeps it
+        for o in pts:
+            o.e_model = 1
+        app.draw_output()
+        self.assertEqual(app.note_text.get(), "")
+        self.assertEqual(app._summary_snapshot["notes"], [])
+
+    def test_added_file_on_its_own_comps_stays_on_the_status_line(self):
+        src = inspect.getsource(ca.App.add_series_file)
+        self.assertIn("Its nights keep their own comps: expect an offset.", src)
+        self.assertIn("+ own_comps)", src)
+
+    def test_zero_point_log_line_stays_a_finding(self):
+        # sheet row m621 (plain Log copy) is not done: the ⚠ line is what lists it in the Findings panel
+        self.assertIn('self.log("⚠ Ensemble zero point, "', inspect.getsource(ca.App._log_zero_point_check))
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
 class TestStackingBoxes(Base):
     def test_skip_reason_names_the_common_one(self):
         app = self.app

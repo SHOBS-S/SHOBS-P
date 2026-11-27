@@ -2269,9 +2269,17 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Could not apply the chosen comps to the added file: …. Its nights keep the comps they were saved with: open Use comps… (Output page) and press Apply to put every night on the same comps."
+    "Could not apply the chosen comps to the added file: …. Its nights keep the comps they were saved with: open Use comps… (Output page) and press Apply to put every night on the same comps.",
+    "… ⚠ Its nights keep their own comps: expect an offset. Open Use comps… and press Apply."
    ],
    "todo": "Open Use comps… and press Apply."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "2 nights (…) reduced by an older version of SHOBS-P keep the old, larger error bars (image units taken as electrons, plus 0.005 mag); run photometry on them again for error bars that match the other nights."
+   ],
+   "todo": "Nothing has to be done. Run photometry on those nights again if you want their error bars to match."
   },
   {
    "section": "Output, Variables mode",
