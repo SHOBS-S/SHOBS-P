@@ -1139,6 +1139,66 @@ def ask_no(title: str, message: str, **kw) -> bool:
     return messagebox.askyesno(title, message, default=messagebox.NO, **kw)
 
 
+def ask_night(parent, title: str, message: str, labels, start: int = 0):
+    """2.4.0 fit-in F4 (m456, m482): choose one night inside the dialog that needs it (Planet transits…,
+    Transmission loss…), instead of a box that says "click one in the night table first, then press the button
+    again". labels: the nights as shown in the night table. Returns the index chosen, or None (Cancel, Escape, the
+    window closed)."""
+    labels = list(labels)
+    result = {"value": None}
+    win = Toplevel(parent)
+    win.title(title)
+    try:
+        win.transient(parent.winfo_toplevel())
+    except Exception:
+        pass
+    frame = ttk.Frame(win, style="Card.TFrame", padding=14)
+    frame.pack(fill=BOTH, expand=True)
+    ttk.Label(frame, text=message, style="Card.TLabel", wraplength=text_wrap_px(win, 70), justify=LEFT).pack(
+        anchor=W, fill=X)
+    var = StringVar(value=labels[start] if labels else "")
+    pick_row = ttk.Frame(frame, style="Card.TFrame")
+    pick_row.pack(anchor=W, pady=(10, 0))
+    ttk.Label(pick_row, text="Night", style="Card.TLabel").pack(side=LEFT, padx=(0, 6))
+    box = ttk.Combobox(pick_row, textvariable=var, values=labels, state="readonly",
+                       width=max([len(x) for x in labels] + [12]) + 2)
+    box.pack(side=LEFT)
+    row = ttk.Frame(frame, style="Card.TFrame")
+    row.pack(fill=X, pady=(12, 0))
+
+    def done(ok: bool):
+        if ok and var.get() in labels:
+            result["value"] = labels.index(var.get())
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+    ttk.Button(row, text="Cancel", command=lambda: done(False)).pack(side=RIGHT, padx=(6, 0))
+    go = ttk.Button(row, text="Choose this night", style="Accent.TButton", command=lambda: done(True))
+    go.pack(side=RIGHT)
+    win.protocol("WM_DELETE_WINDOW", lambda: done(False))
+    win.bind("<Escape>", lambda _e: done(False))
+    for key in ("<Return>", "<KP_Enter>"):
+        win.bind(key, lambda _e: done(True))
+    try:
+        win.update_idletasks()
+        w, h = int(win.winfo_reqwidth()), int(win.winfo_reqheight())
+        top = parent.winfo_toplevel()
+        x = int(top.winfo_rootx()) + max(0, (int(top.winfo_width()) - w) // 2)
+        y = int(top.winfo_rooty()) + max(0, (int(top.winfo_height()) - h) // 3)
+        win.geometry(f"+{x}+{y}")
+    except Exception:
+        pass
+    try:
+        win.grab_set()
+        go.focus_set()
+    except Exception:
+        pass
+    win.wait_window()
+    return result["value"]
+
+
 def ask_choice(parent, title: str, message: str, choices, safe, cancel=None):
     """2.2.18 (item 4): a small modal question whose buttons say what they do (a Yes/No could be read either way).
     choices: [(value, button text)], left to right. Escape and closing the window answer `safe`; Enter presses the
@@ -3056,6 +3116,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.observations = []
             self._clear_series_state()   # 2.2.15 review
             self._take_series_snapshot()
+            self._site_back_after_series()   # 2.4.0 fit-in F4: as Close series does
             self.draw_output()
             tp = getattr(self, "transit_page", None)
             if tp is not None:
@@ -3166,7 +3227,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         level = level or self._msg_level(text)
         # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
         log_to_file(text if level == "note" or not finding else f"[{level.upper()}] {text}")
-        for box in (self.log_box, getattr(self, "photo_log", None), getattr(self, "_log_win_box", None)):
+        for box in (self.log_box, getattr(self, "photo_log", None), self._log_window_box()):
             if box is None:
                 continue
             try:
@@ -3175,8 +3236,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     box.delete("1.0", "1001.0")
                 box.see(END)
             except TclError:   # the Log window was closed
-                if box is getattr(self, "_log_win_box", None):
-                    self._log_win_box = None
+                if box is getattr(self, "_log_win_text", None):
+                    self._log_win_text = None
                 else:
                     raise
         first = text.strip().splitlines()[0] if text.strip() else ""
@@ -3968,6 +4029,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         elif dist < need:
             note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
                     f"star at least {need:.0f} px in, with room for drift — pick a star further in")
+        elif dist < safe and night is not None and night[0] >= need:
+            # 2.4.0 fit-in F4 (sheet row m028): the night's real drift was checked and the star keeps its sky ring
+            # on the frame all night: nothing to say (the fixed 3 × sky-out margin is for a night not checked yet)
+            return ""
         elif dist < safe:
             note = (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
                     "stay clear of the edge and the weakest part of the flat")
@@ -4747,54 +4812,69 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _findings_show_log(self):
         """The Findings window's Show log: the Photometry page's log when that page is in front (shown if hidden),
-        otherwise the Calibrate page, whose log is always there."""
+        the Calibrate page's when that page is. 2.4.0 fit-in F4 (nit N6, 17 Nov): from any other page (Input, Blink,
+        Output, Transit fit) the Log opens in its own window and the page stays where it is; it used to jump to
+        the Calibrate page."""
         try:
-            if getattr(self, "current_step", None) == STEP_PHOTO:
+            step = getattr(self, "current_step", None)
+            if step == STEP_PHOTO:
                 if not self.photo_logf.winfo_manager():
                     self.toggle_photo_log()
-            elif getattr(self, "current_step", None) == STEP_CAL:
+            elif step == STEP_CAL:
                 self.log_box.see(END)
             else:
-                self.open_log_window()   # 2.4.0 fit-in F4 (step 8 N6): never leave the page the user is on
+                self.open_log_window()
         except Exception:
             pass
 
-    def open_log_window(self):
-        """2.4.0 fit-in F4 (step 8 N6): the Log in a window of its own, for the pages that have no log (Input, Blink,
-        Output, Transit fit, Multi-night…). Before, Show log in the Findings window jumped to the Calibrate page
-        and the user lost the page he was on. The window shows the same lines as the Calibrate page's log and
-        follows it while it stays open."""
-        win = getattr(self, "_log_win", None)
+    def _log_window_box(self):
+        """The Log window's text box while that window is open, else None."""
+        box = getattr(self, "_log_win_text", None)
+        if box is None:
+            return None
         try:
-            if win is not None and win.winfo_exists():
-                win.deiconify()
-                win.lift()
-                return win
-        except TclError:
+            if box.winfo_exists():
+                return box
+        except Exception:
             pass
-        win = self._log_win = Toplevel(self)
-        win.title("Log")
-        win.geometry("900x380")
-        box = Text(win, wrap="none", font=(core.MONO_FONT, 9), bg="#1e1e1e", fg="#dcdcdc", insertbackground="white")
-        ys = ttk.Scrollbar(win, orient="vertical", command=box.yview)
-        xs = ttk.Scrollbar(win, orient="horizontal", command=box.xview)
-        box.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
-        xs.pack(side="bottom", fill=X)
-        ys.pack(side=RIGHT, fill="y")
-        box.pack(side=LEFT, fill=BOTH, expand=True)
+        self._log_win_text = None
+        return None
+
+    def open_log_window(self):
+        """2.4.0 fit-in F4 (nit N6): the Log in a window of its own (the same lines as the Calibrate page's Log,
+        and it follows new ones), for pages that have no Log of their own."""
+        box = self._log_window_box()
+        if box is not None:
+            win = box.winfo_toplevel()
+            win.deiconify()
+            win.lift()
+            return win
+        win = Toplevel(self)
+        win.title(f"{APP_TITLE} — Log")
         try:
-            box.insert(END, self.log_box.get("1.0", "end-1c"))
-            if box.get("end-2c", "end-1c") not in ("", "\n"):
-                box.insert(END, "\n")
-        except TclError:
+            win.geometry("860x420")
+        except Exception:
+            pass
+        frame = ttk.Frame(win, style="Card.TFrame", padding=8)
+        frame.pack(fill=BOTH, expand=True)
+        row = ttk.Frame(frame, style="Card.TFrame")
+        row.pack(fill=X, side="bottom", pady=(6, 0))
+        ttk.Button(row, text="Close", command=win.destroy).pack(side="right")
+        ttk.Label(row, text=f"The same lines as the Calibrate page's Log; every line is also in {LOG_FILE}",
+                  style="Hint.TLabel").pack(side=LEFT)
+        box = Text(frame, height=18, wrap="word", font=(core.MONO_FONT, 10), bg="#1e1e1e", fg="#dcdcdc",
+                   insertbackground="#dcdcdc")
+        scroll = ttk.Scrollbar(frame, orient=VERTICAL, command=box.yview)
+        box.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill=Y)
+        box.pack(fill=BOTH, expand=True)
+        try:
+            box.insert(END, self.log_box.get("1.0", "end-1c") + "\n")
+        except Exception:
             pass
         box.see(END)
-        self._log_win_box = box
-
-        def closed(_e=None):
-            if _e is None or _e.widget is win:
-                self._log_win_box = None
-        win.bind("<Destroy>", closed)
+        self._log_win_text = box
+        win.bind("<Escape>", lambda _e: win.destroy())
         return win
 
     def open_webobs(self):
@@ -6075,6 +6155,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         threading.Thread(target=work, daemon=True).start()
 
+    @staticmethod
+    def _no_planets_text(star: str) -> str:
+        """2.4.0 fit-in F4 (m070): the two cases are told apart (tcore.nea_last_status). The Archive answered and
+        lists no planet: a plain line, nothing is wrong. The Archive did not answer: ✖, with what to do."""
+        how = tcore.nea_last_status(star)
+        if how == "no answer":
+            return (f"✖ {star}: the NASA Exoplanet Archive did not answer, so its planets could not be listed. "
+                    "Press Look up again on the Star ID in a minute, or type the planet's name.")
+        if how in ("ok", "unknown"):
+            return (f"The NASA Exoplanet Archive lists no planet for {star}. If the planet is listed under another "
+                    "name of the star, type the planet's name.")
+        # 2.3.0 (#51): how the lookup ended is not known
+        return (f"✖ No planets found for {star} at the NASA Exoplanet Archive (none listed under that name, or the "
+                "Archive did not answer). Type the planet's name, or press Look up again on the Star ID.")
+
     def _planets_for_star_done(self, star: str, res):
         info = self.__dict__.get("_busy_lookups", {}).get("planets")
         if info is None or info.get("name") != star:
@@ -6084,10 +6179,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         if not res:
             self._lookup_busy_stop("planets", name=star)
-            # 2.3.0 (#51): a clear failure line (star_planets cannot tell "none listed" from "no answer")
-            self.planet_source.set(f"✖ No planets found for {star} at the NASA Exoplanet Archive (none listed under "
-                                   "that name, or the Archive did not answer). Type the planet's name, or press Look "
-                                   "up again on the Star ID.")
+            self.planet_source.set(self._no_planets_text(star))
             self.status.set(self.planet_source.get())
             return
         tr = [n for n in res["planets"] if n in res["transiting"]]
@@ -7173,11 +7265,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.update_star_panel()
         return dropped
 
-    def _same_star_by_lookup(self, cur: str, meta: dict):
+    def _same_star_by_lookup(self, cur: str, meta: dict, cur_pos=None):
         """2.4.0 fit-in F4 (m509): are the Input page's Star ID and a loaded series' star the same star? Each
         side's position is the one already known (the Input page's RA/Dec, the file's ra_hours/dec_deg), else
         looked up by name (SIMBAD, then VSX). True = within 1°, False = further apart, None = a lookup failed (the
-        caller then asks, as before)."""
+        caller then asks, as before). Merge F4: cur_pos = (RA hours, Dec) as read from the Input page on the
+        window's thread; given, this touches no Tk variable, so Load series' read worker can run it (the lookups
+        are network calls and must not hold the window)."""
         def known(ra_h, dec):
             try:
                 p = (float(ra_h) * 15.0, float(dec))
@@ -7196,7 +7290,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         new = str(meta.get("star_id") or "").strip()
         if not cur or not new:
             return None
-        a = known(self.ra_hours.get(), self.dec_deg.get()) or looked_up(cur)
+        if cur_pos is None:
+            cur_pos = (self.ra_hours.get(), self.dec_deg.get())
+        a = known(*cur_pos) or looked_up(cur)
         if a is None:
             return None
         b = known(meta.get("ra_hours"), meta.get("dec_deg")) or looked_up(new)
@@ -9128,7 +9224,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.17 (item 6): the rejected frames by their own (file) numbers, and a way to bring one back from the list.
         rej = ttk.Frame(card, style="Card.TFrame")
         rej.pack(anchor=W, fill=X, pady=(2, 0))
-        self.blink_rejected_text = StringVar(value="Rejected: none")
+        self.blink_rejected_text = StringVar(value="Rejected frames: none")   # 2.4.0 fit-in F4: one wording
         self.blink_rejected_label = ttk.Label(rej, textvariable=self.blink_rejected_text, style="Card.TLabel",
                                               justify=LEFT)
         self.blink_rejected_label.pack(side=LEFT, anchor=W)
@@ -9725,7 +9821,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not self.blink_paths:
             # review: the list emptied while a frame was awaited: the wait is over, so is the busy bar's
             self._blink_busy("")
-            self.blink_label.set("No lights in the lights folder.")
+            # 2.4.0 fit-in F4 (nit, 20 Oct): the line names the frames Blink is showing (it said "No lights" with
+            # Flats selected)
+            self.blink_label.set("No flats in the Flat folder." if self.blink_source.get() == "flats"
+                                 else "No lights in the lights folder.")
             self._update_rejected_list()
             return
         path = self.blink_paths[self.blink_index]
@@ -12376,6 +12475,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if sets.get("frame"):
                 return len(sets["frame"])
             rec = meta or sets.get("meta") or {}
+            if int(rec.get("frame_points") or 0) > 0:
+                return int(rec["frame_points"])   # 2.4.0 fit-in F4: the per-frame points, as saved with the night
             if int(rec.get("frames") or 0) > 0:
                 return int(rec["frames"])
             return n_obs * max(int(rec.get("n") or 1), 1)
@@ -12577,9 +12678,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         lines.append(f"⚠ After the meridian flip the {' and '.join(l for l, _m in jumped)} apertures "
                                      f"were off their stars by about ({vx:+.1f}, {vy:+.1f}) px together, while the "
                                      "target's was not: an aperture-placement error at the flip, not a change in "
-                                     "the stars (the check star then looks normal and hides it). Look at "
-                                     "comp1_x/y and check_x/y in the light-curve CSV; if they sit off the stars, "
-                                     "reduce the frames after the flip on their own.")
+                                     "the stars (the check star then looks normal and hides it). Reject the "
+                                     "frames on one side of the flip on the Blink page and run each side on its "
+                                     "own.")   # 2.4.0 fit-in F4 (sheet sweep, m217): the fix in the app's words
         if linear_limit is not None and math.isfinite(linear_limit):
             over = []
             # 2.4.0 fit-in F4 (m218): a comp over the limit is out for the whole night and named by its own plain
@@ -12819,6 +12920,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if self.mode_key != mode:
             return False
         self.log(f"Switched to {MODES[mode]['name']} mode for this run.")
+        # 2.4.0 fit-in F4 (nit): the run that asked for the switch had already answered the site, aperture and
+        # marker questions; the run in the new mode does not ask them a second time (its mode checks still run).
+        self._rerun_answered = True
         self.after(150, self.run_photometry)
         return False
 
@@ -16682,10 +16786,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._watch_highlight = name
         self._refresh_watch_box()
         self._watch_highlight = None
-        self.status.set(text)
-        self.log("Watch stars: " + text)
-        if announce:
-            messagebox.showinfo(APP_TITLE, text + "\n\nIts row is highlighted in the Watch stars box.", parent=self)
+        # 2.4.0 fit-in F4 (sheet sweep, m282): the highlighted row, the status line and the Log; no box for a
+        # harmless repeat (announce is kept for the callers, it changes nothing now)
+        self.log("Watch stars: " + text, keep_status=True)
+        self.status.set(text + " Its row is highlighted in the Watch stars box.")
 
     def _locate_watch_stars(self):
         """After Solve: find each watch star on the new frame by catalog name, then by sky position."""
@@ -19908,7 +20012,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 n_s += 1
                 labels.append(f"S{n_s:03d}")
         if len(xy) < 8:
-            messagebox.showinfo(APP_TITLE, "Fewer than 8 stars found in the frame; a field scan needs more.")
+            # 2.4.0 fit-in F4 (sheet sweep, m354): says what to do
+            messagebox.showinfo(APP_TITLE, "Fewer than 8 stars found in the frame; a field scan needs more. Lower "
+                                           "the Detection threshold (σ) in Scan settings, and check that the frame "
+                                           "is calibrated and in focus.")
             return
         # 2.2.19 (#26): stars kept with a neighbor (box unticked, or watched stars) get a "blended neighbor" caution.
         blended = []
@@ -20375,7 +20482,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         if "VSX" not in sources:   # 2.2.21 (#48): say so, never "not in SIMBAD" as if VSX was asked
                             self.call_ui(self.log, "  Variable-star check: VSX not reached"
                                          + (f" ({sources.vsx_error})" if getattr(sources, "vsx_error", "") else "")
-                                         + "; only SIMBAD was checked.")
+                                         + "; only SIMBAD was checked. Scan again later before reporting a "
+                                           "candidate.")   # 2.4.0 fit-in F4 (sheet sweep, m367)
                         result["known"] = [k for k in known
                                            if 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[0] < w
                                            and 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[1] < h]
@@ -20768,7 +20876,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._run_after_survey = False
         self._remeasure = None
         self._unreadable_said = set()   # 2.4.0 (#94): each unreadable frame is named once per run
-        self._typed_site_check(action="Run photometry")   # 2.3.2 (item 1)
+        # 2.4.0 fit-in F4 (nit): a run restarted by a mode switch (_rerun_in_mode) keeps the answers just given
+        answered = bool(getattr(self, "_rerun_answered", False)) and only is None and stack_run is None
+        self._rerun_answered = False
+        if not answered:
+            self._typed_site_check(action="Run photometry")   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
         if stack_run:
@@ -20797,9 +20909,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             traceback.print_exc()
         self._camera_folders_snapshot(folders=False)   # step 4 review (M2): the sizes and limits this night is run with
-        if not self._aperture_sane():
+        if not answered and not self._aperture_sane():
             return
-        if not self._markers_in_order():
+        if not answered and not self._markers_in_order():
             return
         if only is not None:
             self._series_mode_answered = True   # 2.3.0 (#50): the frames go into the open night, in its mode
@@ -22336,8 +22448,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         if not planets or self.series_mode != "variables":
             if user:
-                self.status.set("Planet transits: no transiting planet with an ephemeris was found for the Star ID "
-                                "(or the NASA Exoplanet Archive could not be reached).")
+                # 2.4.0 fit-in F4 (m448): "none listed" and "the Archive did not answer" are told apart
+                star = (ctx or {}).get("star_text") or self.star_id.get().strip()
+                how = tcore.nea_last_status(star)
+                if planets is None and how == "no answer":
+                    self.status.set(f"✖ Planet transits: the NASA Exoplanet Archive did not answer, so {star}'s "
+                                    "planets could not be checked. Press Planet transits… again in a minute.")
+                elif planets is not None or how in ("ok", "unknown"):
+                    self.status.set(f"Planet transits: the NASA Exoplanet Archive lists no transiting planet with "
+                                    f"an ephemeris for {star}, so there is nothing to leave out.")
+                else:
+                    self.status.set("Planet transits: no transiting planet with an ephemeris was found for the Star "
+                                    "ID (or the NASA Exoplanet Archive could not be reached).")
             return
         changed, asks, found = False, [], False
         for night, pts in points.items():
@@ -22446,9 +22568,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
         if night is None:
-            messagebox.showinfo(APP_TITLE, "Nights with frames in a planet transit: "
-                                + ", ".join(self.night_label(n, short=True) for n in nights)
-                                + ".\n\nClick one in the night table first, then Planet transits… again.")
+            # 2.4.0 fit-in F4 (m456): the night is chosen here, in the dialog
+            night = self._pick_night(nights, "Planet transits…",
+                                     f"{len(nights)} nights have frames in a predicted planet transit. Which night "
+                                     "do you want to look at?")
+        if night is None:
             return
         info = self._night_info(night)
         what = "; ".join(self._planet_hits_text(h) for h in info["planet_transits"])
@@ -23290,14 +23414,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.18 (item 4): labeled buttons instead of Yes/No (16 Oct: "now left out. Keep these points?" was read as
         # "keep as is", and a Yes put dew points back into the HD 219134 series).
         ex = self._transmission_excess(night)
-        return ("Use these points in the light curve (errors scaled for the lost light), or leave them out?\n\n"
-                f"\u201c{self.KEEP_USE}\u201d: each frame's photon error already comes from its own (reduced) fluxes, "
-                "and scintillation is a fraction of the light that arrives, so the error bars grow where the light is "
-                "lost. "
-                + (f"On top of that, every point used gets the {ex:.3f} mag star-to-star scatter measured in that "
-                   "stretch (in quadrature), so the error bars stay honest even if this was a smooth cloud bank. "
-                   if ex > 0 else "")
-                + f"\u201c{self.KEEP_LEAVE}\u201d (the default; also Escape or closing this window) leaves them "
+        # 2.4.0 fit-in F4 (sheet sweep, x025): two lines, what each button does; the why is in the manual (ch 12)
+        return ("Use these points in the light curve, or leave them out?\n\n"
+                f"\u201c{self.KEEP_USE}\u201d: they go into the light curve with larger error bars"
+                + (f" ({ex:.3f} mag added for the scatter measured in that stretch)" if ex > 0 else "")
+                + f".\n\u201c{self.KEEP_LEAVE}\u201d (the default; also Escape or closing this window): they stay "
                   "flagged, like cloud.")
 
     def _ask_keep(self, night: str, message: str, where: str) -> bool:
@@ -23344,6 +23465,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                  + (f"kept{asked}: errors follow the reduced light plus the star-to-star scatter there."
                     if keep else f"left out, flagged{asked}."))
 
+    def _pick_night(self, nights: list, title: str, message: str):
+        """2.4.0 fit-in F4 (m456, m482): one of `nights`, chosen in a small dialog (ask_night); None = Cancel."""
+        labels = [self.night_label(n, short=True) for n in nights]
+        if len(set(labels)) != len(labels):
+            labels = [f"{lab} ({n})" for lab, n in zip(labels, nights)]
+        k = ask_night(self, f"{APP_TITLE} — {title}", message, labels, start=len(labels) - 1)
+        return nights[k] if k is not None else None
+
     def edit_transmission(self):
         """2.2.14 (item 18): keep or leave out a night's transmission-loss points (the highlighted night, or the
         only night that has some)."""
@@ -23355,9 +23484,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
         if night is None:
-            messagebox.showinfo(APP_TITLE, "Nights with " + core.HAZE_LABEL + ": "
-                                + ", ".join(self.night_label(n, short=True) for n in nights)
-                                + ".\n\nClick one in the night table first, then Transmission loss… again.")
+            # 2.4.0 fit-in F4 (m482): the night is chosen here, in the dialog
+            night = self._pick_night(nights, "Transmission loss…",
+                                     f"{len(nights)} nights have {core.HAZE_LABEL}. Which night do you want to "
+                                     "look at?")
+        if night is None:
             return
         n, words = self._transmission_summary(night)
         kept = bool(self._night_info(night).get("keep_transmission"))
@@ -23414,20 +23545,100 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return f"Bins    every point used ({minutes:g}-min bins too coarse for {period_days:.4g} d)"
 
     def _refresh_period(self):
+        """The period search, in three steps so Load series can run the middle one on a worker thread (2.4.0 fit-in
+        F4, #100 item 4): _period_prepare reads the boxes and the points (Tk thread), _period_job does the numbers
+        (no Tk, no self), _period_apply stores the result (Tk thread). Here: all three in line."""
+        job = self._period_prepare()
+        if job is not None:
+            self._period_apply(job, self._period_job(job))
+
+    def _times_csv_period(self):
+        """2.4.0 fit-in F4 (8c): the period last used in this star's saved times of max/min (the times CSV chosen
+        this session, else the one beside the series file, else in the output folder), or None."""
+        star = self.star_id.get().strip() or "target"
+        if self.extremum_csv and core.same_star_text(self.extremum_csv_star, star):
+            path = self.extremum_csv
+        elif self.series_path:
+            path = os.path.join(os.path.dirname(self.series_path), core.extremum_csv_name(star))
+        else:
+            folder = self.output_dir.get().strip()   # read only: never makes the folder (as _out_folder would)
+            path = os.path.join(folder, core.extremum_csv_name(star)) if folder else ""
+        try:
+            if not path or not os.path.exists(path):
+                return None
+            key = (path, os.path.getmtime(path), star)
+            cached = getattr(self, "_times_period_cache", None)
+            if cached and cached[0] == key:
+                return cached[1]
+            rows = [r for r in core.read_extremum_csv(path) if core.same_star_text(r.get("star"), star)]
+            got = core.extremum_noise_choice(csv_rows=rows)["period"]
+            self._times_period_cache = (key, got)
+            return got
+        except Exception:
+            return None
+
+    def _known_periods(self) -> list:
+        """2.4.0 fit-in F4 (8c): [(label, days)] the search range follows: VSX's period (looked up, or kept in the
+        series file), the period of the star's saved times of max/min, and the marked periods."""
+        known = []
+        if self.catalog_period:
+            known.append(("VSX", self.catalog_period))
+        saved = self._times_csv_period()
+        if saved:
+            known.append(("the saved times'", saved))
+        try:
+            known += [("Marked", m) for m in self._parse_marks()]
+        except Exception:
+            pass
+        return known
+
+    def _period_follow_known(self, span_days: float):
+        """2.4.0 fit-in F4 (#79 item 8c). RESULTS-CHANGING: a known period outside the Period search boxes, or at
+        their edge, widens the boxes to cover it before the search (core.period_range_follow), with one plain line
+        in the Period box and the Log. A known period longer than half the data span is left alone (no range can
+        test it yet). Returns the (lo, hi) to search, or None when the boxes cannot be read."""
+        try:
+            lo, hi = float(self.min_period.get()), float(self.max_period.get())
+        except Exception:
+            self._period_range_note = ""
+            return None
+        if not (0 < lo < hi):
+            self._period_range_note = ""
+            return lo, hi
+        got = core.period_range_follow(lo, hi, self._known_periods(), span_days)
+        new = (got["lo"], got["hi"])
+        kept = getattr(self, "_period_range_widened", None)
+        if got["widened"] and new != (lo, hi):
+            self.min_period.set(new[0])
+            self.max_period.set(new[1])
+            note = core.period_range_note((lo, hi), new, got["widened"])
+            self._period_range_widened = (new, note)
+            self._period_range_note = note
+            self.log("Period search " + note[len("searched "):] + ".", keep_status=True)
+        elif kept and kept[0] == (lo, hi):
+            self._period_range_note = kept[1]   # the boxes are still the widened ones: the row stays
+        else:
+            self._period_range_widened = None
+            self._period_range_note = ""
+        return new
+
+    def _period_prepare(self):
+        """Tk thread: everything the period search needs, read from the boxes and the series. None under 8 usable
+        points (self.period is then None)."""
         self._apply_cloud()
         usable = self._usable()
         self.period = None
         self._usable_count = len(usable)   # 2.4.0 fit-in F3 (F2-c): the Refit period gate reads it
         if len(usable) < 8:
-            return
+            return None
         corrected = self._analysis_values(usable)
         jd = np.array([o.jd for o in usable])
         values = np.array(corrected, dtype=float)
-        self._period_note = f"every point ({len(usable)})"
+        note = f"every point ({len(usable)})"
         point_nights = [o.night for o in usable]
         minutes = {"5 min bins": 5.0, "10 min bins": 10.0, "30 min bins": 30.0}.get(self.period_bins.get())
-        self._period_bins_note = ""
-        point_jd, point_values, point_note = jd, values, self._period_note
+        bins_note = ""
+        job = {"point_jd": jd, "point_values": values, "point_nights": point_nights, "point_note": note}
         if minutes:
             # 2.2.19 (#19): a period shorter than about 10 bins is smeared by them (BL Cam, 0.039 d, was searched in
             # 10-min bins: under 6 per cycle). With the VSX or a marked period that short, use every point.
@@ -23438,7 +23649,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 expected = []
             if expected and min(expected) < 10.0 * minutes / 1440.0:
                 short = min(expected)
-                self._period_bins_note = self._bins_too_coarse(minutes, short)
+                bins_note = self._bins_too_coarse(minutes, short)
                 minutes = None
         if minutes:
             # Bins make each night count by the hours observed, not by how many frames were taken,
@@ -23448,84 +23659,109 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 jd = np.array([b["jd"] for b in bins])
                 values = np.array([b["value"] for b in bins])
                 point_nights = [b["night"] for b in bins]
-                self._period_note = f"{len(bins)} {minutes:g}-min bins"
+                note = f"{len(bins)} {minutes:g}-min bins"
+        finite = jd[np.isfinite(jd)]
+        span = float(finite.max() - finite.min()) if finite.size else 0.0
+        rng = self._period_follow_known(span)   # 2.4.0 fit-in F4 (8c): the range follows the known period
+        self._period_range_used = rng   # 2.2.18 (item 16)
+        night_am = self._night_airmasses(usable)
+        nights = sorted({o.night for o in usable})
+        job.update(jd=jd, values=values, nights=point_nights, note=note, bins_note=bins_note, minutes=minutes,
+                   range=rng, night_am=night_am, corrected=list(corrected), usable_nights=[o.night for o in usable],
+                   labels={n: self.night_label(n, short=True) for n in nights})
+        return job
+
+    @staticmethod
+    def _period_job(job: dict) -> dict:
+        """Worker-safe (no Tk, no self): the Lomb-Scargle search and its checks. Returns {"period" (dict or None),
+        "error" (text or ''), "note", "bins_note", "log" [lines], "skip" (airmass-check skip word)}."""
+        out = {"period": None, "error": "", "note": job["note"], "bins_note": job["bins_note"], "log": [],
+               "skip": None}
+        rng = job["range"]
+        if rng is None:
+            out["error"] = "the Period search boxes need two numbers"
+            return out
+        lo, hi = rng
+        jd, values, point_nights, minutes = job["jd"], job["values"], job["nights"], job["minutes"]
         try:
-            self._period_range_used = (float(self.min_period.get()), float(self.max_period.get()))   # 2.2.18 (item 16)
-        except Exception:
-            self._period_range_used = None
-        try:
-            self.period = core.lomb_scargle(jd, values, float(self.min_period.get()), float(self.max_period.get()))
+            period = core.lomb_scargle(jd, values, lo, hi)
         except Exception as exc:
-            self.status.set(f"Period search: {exc}")
-            self.period = None
-        if self.period and minutes and len(jd) != len(point_jd) \
-                and self.period["period_days"] < 10.0 * minutes / 1440.0:
+            out["error"] = str(exc)
+            return out
+        if period and minutes and len(jd) != len(job["point_jd"]) and period["period_days"] < 10.0 * minutes / 1440.0:
             # 2.2.19 (#19): the best peak from bins is itself under 10 bins long: search every point instead.
             try:
-                again = core.lomb_scargle(point_jd, point_values, float(self.min_period.get()),
-                                          float(self.max_period.get()))
+                again = core.lomb_scargle(job["point_jd"], job["point_values"], lo, hi)
             except Exception:
                 again = None
             if again:
-                self._period_bins_note = self._bins_too_coarse(minutes, self.period["period_days"])
-                self.period = again
-                jd, values, point_nights = point_jd, point_values, [o.night for o in usable]
-                self._period_note = point_note
-        if self.period:
-            # 2.2.3: sanity checks on the best period (one-day aliases; a period carried by one night alone).
-            self.period["alias_text"] = core.period_alias_text(self.period["period_days"])
-            fap = self.period.get("fap", float("nan"))
-            loo = {"carried_by": [], "checked": 0}
-            if not (math.isfinite(fap) and fap > 0.05):
-                try:
-                    loo = core.period_leave_one_out(jd, values, point_nights, self.period,
-                                                    float(self.min_period.get()), float(self.max_period.get()))
-                except Exception:
-                    pass
-            self.period["carried_by"] = loo["carried_by"]
-            # 2.2.17 (item 10): a FAP that counts nights, and the airmass / color check of the nightly means.
-            # review: any failure there leaves the period as it was without the check, with one log line.
+                out["bins_note"] = App._bins_too_coarse(minutes, period["period_days"])
+                period = again
+                jd, values, point_nights = job["point_jd"], job["point_values"], job["point_nights"]
+                out["note"] = job["point_note"]
+        out["period"] = period
+        if not period:
+            return out
+        # 2.2.3: sanity checks on the best period (one-day aliases; a period carried by one night alone).
+        period["alias_text"] = core.period_alias_text(period["period_days"])
+        fap = period.get("fap", float("nan"))
+        loo = {"carried_by": [], "checked": 0}
+        if not (math.isfinite(fap) and fap > 0.05):
             try:
-                self._period_airmass_checks(usable, corrected, jd, values, point_nights)
-            except Exception as exc:
-                for key in ("night_fap", "airmass_trend", "night_means", "airmass_check"):
-                    self.period.pop(key, None)
-                self.log(f"Airmass check of the period not done ({exc}).")
+                loo = core.period_leave_one_out(jd, values, point_nights, period, lo, hi)
+            except Exception:
+                pass
+        period["carried_by"] = loo["carried_by"]
+        # 2.2.17 (item 10): a FAP that counts nights, and the airmass / color check of the nightly means: (b) its FAP
+        # counting nights (core.period_night_fap); (a) the nightly means of the fold's values against each night's
+        # median airmass (core.airmass_trend); (c) when they follow airmass, the period is demoted if it disappears
+        # with the trend taken out or without the high-airmass nights (core.period_airmass_check).
+        # review: any failure there leaves the period as it was without the check, with one log line.
+        try:
+            try:
+                period["night_fap"] = core.period_night_fap(jd, values, point_nights, period, lo, hi)
+            except Exception:
+                period["night_fap"] = None
+            night_am = job["night_am"]
+            means = core.nightly_means(job["corrected"], job["usable_nights"])
+            for m in means:
+                m["airmass"] = night_am.get(m["night"], float("nan"))
+            trend = core.airmass_trend(means)
+            period["airmass_trend"] = trend
+            period["night_means"] = means
+            if trend.get("skip"):
+                out["skip"] = ((trend.get("skip") or "", len(means)), trend["skip"])
+            try:
+                labels = job["labels"]
+                period["airmass_check"] = core.period_airmass_check(
+                    jd, values, point_nights, night_am, period, lo, hi, trend, name=lambda n: labels.get(n, str(n)))
+            except Exception:
+                period["airmass_check"] = None
+        except Exception as exc:
+            for key in ("night_fap", "airmass_trend", "night_means", "airmass_check"):
+                period.pop(key, None)
+            # 2.4.0 fit-in F4 (sheet sweep, m490): says what it means for the period
+            out["log"].append(f"Airmass check of the period not done ({exc}). The period stands as found, without "
+                              "that check.")
+        return out
 
-    def _period_airmass_checks(self, usable, corrected, jd, values, point_nights):
-        """2.2.17 (item 10): before a best period is shown as significant. (b) its FAP counting nights
-        (core.period_night_fap); (a) the nightly means of the fold's values (check-star corrected when that is on)
-        against each night's median airmass (core.airmass_trend); (c) when they follow airmass, the period is
-        demoted if it disappears with the trend taken out or without the high-airmass nights
-        (core.period_airmass_check). Airmass: the points' own, else from the target's RA/Dec and the site; without
-        either the check is skipped with one log line."""
-        try:
-            lo, hi = float(self.min_period.get()), float(self.max_period.get())
-        except (TypeError, ValueError):
-            return
-        try:
-            self.period["night_fap"] = core.period_night_fap(jd, values, point_nights, self.period, lo, hi)
-        except Exception:
-            self.period["night_fap"] = None
-        night_am = self._night_airmasses(usable)
-        means = core.nightly_means(corrected, [o.night for o in usable])
-        for m in means:
-            m["airmass"] = night_am.get(m["night"], float("nan"))
-        trend = core.airmass_trend(means)
-        self.period["airmass_trend"] = trend
-        self.period["night_means"] = means
-        key = (trend.get("skip") or "", len(means))
-        if trend.get("skip") and getattr(self, "_airmass_skip_logged", None) != key:
-            self._airmass_skip_logged = key
-            if trend["skip"] == "no airmass":
+    def _period_apply(self, job: dict, out: dict):
+        """Tk thread: the search's result becomes the Output page's period."""
+        self._period_note = out["note"]
+        self._period_bins_note = out["bins_note"]
+        self.period = out["period"]
+        # 2.4.0 fit-in F4 (sheet sweep, m487): why no search was made is said in the Period box itself (draw_output)
+        self._period_error = out["error"] or ""
+        if out["error"]:
+            self.status.set(f"Period search: {out['error']}")
+        skip = out.get("skip")
+        if skip and getattr(self, "_airmass_skip_logged", None) != skip[0]:
+            self._airmass_skip_logged = skip[0]
+            if skip[1] == "no airmass":
                 self.log("Airmass check of the period skipped: no airmass (type the site on the Input page and the "
                          "target's RA/Dec, or use frames with pointing in the headers).")
-        try:
-            self.period["airmass_check"] = core.period_airmass_check(
-                jd, values, point_nights, night_am, self.period, lo, hi, trend,
-                name=lambda n: self.night_label(n, short=True))
-        except Exception:
-            self.period["airmass_check"] = None
+        for line in out["log"]:
+            self.log(line)
 
     def _draw_airmass_corrected(self, ax, usable, zoom):
         """2.2.17 (item 10): with "Airmass-corrected night means" ticked, each night's mean of the fold's values with
@@ -23664,6 +23900,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         meta["align_flip"] = bool(self.align_flip.get())
         meta["pier_segments"] = bool(self.pier_segments.get())   # 2.2.14 (item 20)
         meta["period_bins"] = self.period_bins.get()
+        if self.catalog_period:
+            # 2.4.0 fit-in F4 (8c): VSX's elements stay with the series, so a series loaded with no lookup (offline,
+            # or straight from the Output page) still knows where its period lies (a new key; older versions ignore
+            # it)
+            meta["vsx_elements"] = {"period_d": self.catalog_period, "epoch": self.catalog_epoch,
+                                    "var_type": self.catalog_var_type or ""}
         meta["night_binning"] = self.night_bin
         meta["legacy_mixed_nights"] = sorted(self.legacy_mixed)
         meta["elevation"] = self.elevation.get()
@@ -23811,6 +24053,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 except (TypeError, ValueError):
                     pass
         self._migrate_min_period(meta)   # 2.2.19 (#19)
+        vsx = meta.get("vsx_elements")
+        if isinstance(vsx, dict) and not self.catalog_period:   # 2.4.0 fit-in F4 (8c); a lookup's own values win
+            try:
+                p = float(vsx.get("period_d"))
+                if math.isfinite(p) and p > 0:
+                    self.catalog_period = p
+                    e = vsx.get("epoch")
+                    self.catalog_epoch = float(e) if e not in (None, "") else self.catalog_epoch
+                    self.catalog_var_type = self.catalog_var_type or str(vsx.get("var_type") or "")
+            except (TypeError, ValueError):
+                pass
         self._mobs_series_pixel(meta)   # 2.4.0 (#107, review N3)
         if meta.get("binning"):
             want = int(meta["binning"])
@@ -24413,7 +24666,34 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 pass
         self.log(f"Series closed: {name} (the file on disk is unchanged)." if had_file else "Series closed.")
+        self._site_back_after_series()
         self.status.set("Series closed. The next run is a single night (a new series).")
+
+    def _site_back_after_series(self):
+        """2.4.0 fit-in F4 (nit, 13 Nov). RESULTS-CHANGING for the next night reduced: a loaded series shows its own
+        site and observer code on the Input page; closing it used to leave them there, so the next night was
+        reduced (airmass, BJD, the report's observer code) with the closed series' site. They go back to what the
+        Input page held before the series was loaded. A box typed over since the load is the user's and is kept."""
+        held = getattr(self, "_site_before_series", None)
+        self._site_before_series = None
+        if not held:
+            return
+        before, series = held
+        back = []
+        self._loading_meta = True   # the user's own values coming back are not "typed" (no question, no save)
+        try:
+            for k in self._SERIES_SITE_KEYS:
+                var = getattr(self, k)
+                if str(var.get() or "") == series.get(k, "") and before.get(k, "") != series.get(k, ""):
+                    var.set(before.get(k, ""))
+                    back.append(k)
+        finally:
+            self._loading_meta = False
+        if back:
+            words = {"lat": "latitude", "lon": "longitude", "elevation": "elevation", "observer": "observer code"}
+            self.log("Input page: your own " + ", ".join(words[k] for k in back) + " "
+                     + ("is" if len(back) == 1 else "are") + " back (the closed series had "
+                     + self._site_words(series) + ").", keep_status=True)
 
     def _remember_series_dir(self, path: str):
         """2.2.3: the Save/Load series dialogs start in the folder used last time."""
@@ -24445,7 +24725,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             kept = self._write_series(path)
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not save: {exc}")
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"Could not save the series to {os.path.basename(path)}: {exc}\n\n"
+                                            "Save it to another folder, or close the program that has the file open, "
+                                            "then press Save series again. The points are still open here.")
             return
         finally:
             self._explicit_save = False
@@ -24456,6 +24739,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         + f". Next night, load this file before reducing: {path}")
 
     def load_series(self):
+        if self.busy:
+            return   # greyed during a job (and while a series is loading); a silent backstop
         # 2.2.15 (review): an open series with unsaved points is offered a save first, as Close series does.
         if self.observations and not self._offer_series_save("load another"):
             return
@@ -24486,10 +24771,70 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             else:
                 self.busy_words(bar["tok"], f"Loading {name}… {words}")
                 self._busy_show_now()
+        # 2.4.0 fit-in F4 (#100 item 4, #116): the two slow parts, reading the file and the period search, run on
+        # a worker thread, so the window keeps answering and the bar keeps moving; everything that touches the
+        # window (the stars and settings, the questions, the drawing) stays on the window's own thread, between
+        # them. The job buttons are greyed while a worker runs (the run lock), as for any other job.
+        if self.SERIES_SYNC:   # tests: the same steps, in line
+            try:
+                self._load_series_file(path, step)
+            finally:
+                self.busy_end(bar["tok"])
+            return
+
+        def fail(exc):
+            traceback.print_exc()
+            self._series_lock(False)
+            step(None)
+            self.log(f"✖ Load series stopped: {type(exc).__name__}: {exc}. The series may be only partly loaded: "
+                     "load it again.")
+
+        def read_done(got):
+            self._series_lock(False)
+            try:
+                self._load_series_file(path, step, got=got, sync=False, fail=fail)
+            except Exception as exc:
+                fail(exc)
+
+        # merge F4 (m509 on the worker): what the same-star lookup needs from the window, read here on its thread
+        cur_id = self.star_id.get().strip()
+        cur_pos = (self.ra_hours.get(), self.dec_deg.get())
+
+        def read():
+            try:
+                got = (core.load_series(path), None)
+            except Exception as exc:
+                got = (None, exc)
+            if got[1] is None and cur_id:
+                meta = got[0][0] if isinstance(got[0], tuple) and got[0] else {}
+                new_id = str((meta or {}).get("star_id") or "").strip()
+                if new_id and name_key(new_id) != name_key(cur_id):
+                    # only names that differ can lead to the m509 question; the answer waits in got[2]
+                    try:
+                        same = self._same_star_by_lookup(cur_id, meta, cur_pos=cur_pos)
+                    except Exception:
+                        same = None
+                    got = (got[0], None, {"same": same, "cur": cur_id})
+            self.call_ui(read_done, got)
+        self._series_lock(True)
         try:
-            self._load_series_file(path, step)
-        finally:
-            self.busy_end(bar["tok"])
+            threading.Thread(target=read, daemon=True).start()
+        except Exception as exc:
+            fail(exc)
+
+    SERIES_SYNC = False   # tests set True: Load series runs in line (the threaded path has its own test)
+
+    def _series_lock(self, on: bool):
+        """2.4.0 fit-in F4 (#100 item 4): the run lock for the worker parts of Load series (job buttons greyed, wait
+        cursor). The busy bar is Load series' own (its words change step by step)."""
+        self.busy = bool(on)
+        if on and getattr(self, "_cancel", None) is None:
+            self._cancel = threading.Event()
+        try:
+            self.config(cursor="watch" if on else "")
+            self.gates.refresh()
+        except Exception:
+            pass
 
     def _busy_show_now(self):
         """2.4.0 (#100): draw the busy bar and its words now, for a step that keeps the window's own thread (the
@@ -24502,12 +24847,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             pass
 
-    def _load_series_file(self, path: str, step):
-        """The rest of Load series, with the busy bar's words changed at each step (step(None) ends the bar)."""
+    def _load_series_file(self, path: str, step, got=None, sync: bool = True, fail=None):
+        """The rest of Load series, with the busy bar's words changed at each step (step(None) ends the bar).
+        2.4.0 fit-in F4 (#100 item 4): got = (the file as read by the worker, or None, its error); sync=False runs
+        the period search on a worker thread and finishes in _load_series_finish. Tk thread only."""
         self._remember_series_dir(path)
         self.extremum_csv = self.extremum_csv_star = ""   # 2.2.14 review: the next times CSV follows this series
         try:
-            meta, observations = core.load_series(path)
+            if got is None:
+                meta, observations = core.load_series(path)
+            elif got[1] is not None:
+                raise got[1]
+            else:
+                meta, observations = got[0]
         except Exception as exc:
             step(None)
             messagebox.showerror(APP_TITLE, f"Could not read {os.path.basename(path)}:\n{exc}")
@@ -24524,8 +24876,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if why and not sure:
             # 2.4.0 fit-in F4 (m509): both names are looked up and their positions compared before anything is
             # asked; the question is left for a lookup that fails
-            step("where the two names point (SIMBAD / VSX)")
-            same = self._same_star_by_lookup(self.star_id.get().strip(), meta)
+            pre = got[2] if got is not None and len(got) > 2 else None
+            if pre is not None and pre.get("cur") == self.star_id.get().strip():
+                same = pre.get("same")   # merge F4: looked up on the read worker, off the window's thread
+            else:
+                step("where the two names point (SIMBAD / VSX)")
+                same = self._same_star_by_lookup(self.star_id.get().strip(), meta)
             if same is True:
                 self.log(f"Kept the marked stars: {meta.get('star_id')} and {self.star_id.get().strip()} are the "
                          "same star (their catalog positions agree).")
@@ -24563,10 +24919,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         auids_before = set(self.seq_auids)
         names_before = {role: name_key(getattr(self, f"{role}_name").get()) for role in COMP_ROLES + ("check",)}
         self._loading_points = observations   # review S4: the spares these points measured count as "in use"
+        # 2.4.0 fit-in F4 (nit, 13 Nov): the Input page's own site and observer code, as they were before the first
+        # series file changed them, so Close series can put them back (see _site_back_after_series)
+        site_before = {k: str(getattr(self, k).get() or "") for k in self._SERIES_SITE_KEYS}
         try:
             self._apply_meta(meta)
         finally:
             self._loading_points = None
+        site_now = {k: str(getattr(self, k).get() or "") for k in self._SERIES_SITE_KEYS}
+        held = getattr(self, "_site_before_series", None)
+        if held is not None:
+            self._site_before_series = (held[0], site_now)   # a series loaded over a series: the first "before" stands
+        elif site_now != site_before:
+            self._site_before_series = (site_before, site_now)
         for role, (name, mag) in kept_marked.items():
             getattr(self, f"{role}_name").set(name)
             getattr(self, f"{role}_mag").set(mag)
@@ -24618,13 +24983,49 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         step("the period search")
-        self._refresh_period()
+        job = self._period_prepare()
+        if sync or job is None:
+            if job is not None:
+                self._period_apply(job, self._period_job(job))
+            self._load_series_finish(path, step, observations, fp_file, left_out)
+            return
+        gen = self._series_gen
+
+        def searched(out):
+            self._series_lock(False)
+            try:
+                if gen != self._series_gen or self.observations is not observations:
+                    step(None)   # the series was closed or replaced while the search ran: nothing of it is shown
+                    return
+                if isinstance(out, Exception):
+                    self.log(f"Period search: {out}")
+                else:
+                    self._period_apply(job, out)
+                self._load_series_finish(path, step, observations, fp_file, left_out)
+            except Exception as exc:
+                (fail or (lambda e: step(None)))(exc)
+
+        def search():
+            try:
+                out = self._period_job(job)
+            except Exception as exc:
+                traceback.print_exc()
+                out = exc
+            self.call_ui(searched, out)
+        self._series_lock(True)
+        try:
+            threading.Thread(target=search, daemon=True).start()
+        except Exception as exc:
+            searched(exc)
+
+    def _load_series_finish(self, path: str, step, observations, fp_file, left_out):
+        """Load series, after the period search: the drawing and the closing lines. Tk thread."""
         # 2.2.15 (item 7): the series as on disk (review M1: a comp left out at Load is a change not saved yet)
         self._series_saved_fp = fp_file if left_out else self._series_fingerprint()
         step("drawing the light curve")
         self.draw_output()
         step(None)
-        self._warn_legacy(self.legacy_mixed, os.path.basename(path))
+        self._warn_legacy(self.legacy_mixed, os.path.basename(path), path)
         try:
             self._stack_files_note()   # 2.3.0 review fix (#54): stack files pruned from the cache: said, not needed
         except Exception:
@@ -24774,9 +25175,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         axis_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
         groups.add("view", axis_frame, pad=14)
         bin_frame = ttk.Frame(g, style="Card.TFrame")
-        ttk.Label(bin_frame, text="Bin", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        # 2.4.0 fit-in F4 (nit, 20 Oct): "Plot bins", as on the Transit fit page: the page has three bin settings
+        # (this one, Period from, and Binning on the Input page) and a bare "Bin" did not say which it was
+        ttk.Label(bin_frame, text="Plot bins", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         bin_box = ttk.Combobox(bin_frame, textvariable=self.bin_choice, values=BIN_CHOICES, width=10, state="readonly")
         bin_box.pack(side=LEFT)
+        self._add_tooltip(bin_box, "Bins for the light-curve plot only (◆ means with their errors). The period "
+                                   "search has its own choice (Period from), and saved files hold every point.")
         bin_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
         groups.add("view", bin_frame, pad=14)
         mark_frame = ttk.Frame(g, style="Card.TFrame")
@@ -25152,9 +25557,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             nights |= {o.night for o in observations if o.night not in known}
         return nights
 
-    def _warn_legacy(self, nights: set, source: str):
+    def _warn_legacy(self, nights: set, source: str, path: str | None = None):
+        """2.4.0 fit-in F4 (sheet sweep, m520): the box is shown once per series file (remembered in the settings);
+        after that one plain Log line. The Output page's caution stays on those nights, and Save AAVSO report
+        refuses a report that holds them (_legacy_report_stop)."""
         if not nights:
             return
+        if path:
+            key = os.path.normcase(os.path.abspath(path))
+            seen = [p for p in (self.settings.get("legacy_warned") or []) if isinstance(p, str)]
+            if key in seen:
+                self.log(f"{source}: {len(nights)} night{'s' if len(nights) != 1 else ''} "
+                         f"({', '.join(sorted(nights))}) reduced by an early version that binned before the "
+                         "debayer; their filter and colors are not real. Run photometry on them again before "
+                         "reporting them (the Output page says so too).", keep_status=True)
+                return
+            self.settings["legacy_warned"] = (seen + [key])[-200:]
+            try:
+                self._save_settings()
+            except Exception:
+                traceback.print_exc()
         messagebox.showwarning(
             APP_TITLE,
             f"{source} has night(s) reduced by an early version of SHOBS-P that binned before the debayer:\n  {', '.join(sorted(nights))}\n\n"
@@ -25497,8 +25919,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ax = self.out_ax2
         cautions = []
         old_model = core.error_model_text(obs_list, lambda n: self.night_label(n, short=True))   # 2.2.17 (item 8)
-        if old_model:
-            cautions.append(old_model)
+        # 2.4.0 fit-in F4 (sheet sweep, x119): a plain line under the night table (it is on every redraw of such
+        # a series, so it does not shout); the saved plot keeps it with its other notes
+        self._output_note = old_model or ""
         period_lines = []
         self._period_range_fix = None   # 2.2.19 (#19)
         self._period_verdict = None
@@ -25584,11 +26007,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 detail = ", ".join(x for x in (per_point, n2n) if x)
                 verdict_checks["constant"] = ("the star looks constant at this precision"
                                               + (f" ({detail})" if detail else ""))
+                # 2.4.0 fit-in F4 (nit, MP UMa 17 Nov): never "constant" while a night clearly changes
+                try:
+                    moving = core.in_night_changes(u_jd, corrected, [o.night for o in usable])
+                except Exception:
+                    moving = []
+                if moving:
+                    top = moving[0]
+                    more = len(moving) - 1
+                    verdict_checks["constant"] = (
+                        f"the star does change ({top['range']:.2f} mag within "
+                        f"{self.night_label(top['night'], short=True)}"
+                        + (f", and on {more} more night{'s' if more != 1 else ''}" if more else "")
+                        + f"; point scatter {top['noise']:.3f} mag), but these nights do not pin a period down. "
+                          "Add nights")
             period_lines = [
                 "",   # the verdict row
                 ("Best    " if significant else "Peak    ") + f"{p:.5f} d ({p * 24:.2f} h)",
-                f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else "")
-                + (f" (points), {night_fap:.1e} counting nights ("
+                # 2.4.0 fit-in F4 (nit): core.fap_text, so an underflowed FAP reads "< 1e-99", not "0.0e+00"
+                f"Power   {self.period['power']:.2f}" + (f"   FAP {core.fap_text(fap)}" if math.isfinite(fap) else "")
+                + (f" (points), {core.fap_text(night_fap, (self.period.get('night_fap') or {}).get('floor'), (self.period.get('night_fap') or {}).get('nights'))} counting nights ("
                    + ("from the nightly means" if (self.period.get("night_fap") or {}).get("method") == "nightly means"
                       else "night offsets taken out") + ")"
                    if math.isfinite(night_fap) and math.isfinite(fap) else ""),   # 2.2.17 (item 10)
@@ -25599,34 +26037,28 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             ]
             if self.catalog_period:
                 period_lines.append(f"VSX     {self.catalog_period:.5f} d")
-            # 2.2.19 (#19): the VSX period or a marked period outside the range searched cannot be found: say so.
+            saved_p = self._times_csv_period()
+            if saved_p:
+                period_lines.append(f"Saved   {saved_p:.5f} d (the saved times' period)")
+            # 2.4.0 fit-in F4 (#79 item 8c): the search follows the known period (VSX, the saved times, the marked
+            # periods): _period_follow_known widened the boxes before the search, so the old "⚠ cannot find" row
+            # and its "Search … instead" button are gone. What is left is plain: a row saying the range was
+            # widened, or that the known period is longer than these nights can test.
+            if getattr(self, "_period_range_note", ""):
+                period_lines.append("Range   " + self._period_range_note)
             try:
                 lo_now, hi_now = float(self.min_period.get()), float(self.max_period.get())
-                outside, fix = core.period_range_check(
-                    ([("VSX", self.catalog_period)] if self.catalog_period else [])
-                    + [("Marked", m) for m in self._parse_marks()], lo_now, hi_now)
+                outside, _fix = core.period_range_check(self._known_periods(), lo_now, hi_now)
             except Exception:
-                outside, fix = [], None
+                outside = []
             if outside:
                 what = ", ".join(f"{lab} {pp:.5g} d" for lab, pp in outside)
-                all_jd = [o.jd for o in obs_list if math.isfinite(o.jd)]
+                all_jd = [o.jd for o in usable if math.isfinite(o.jd)]
                 data_span = (max(all_jd) - min(all_jd)) if all_jd else 0.0
                 # review: a period longer than half the data span cannot be found by widening the range (a Mira's
-                # 332 d on 3 nights): say so, and offer no button for it.
-                findable = [(lab, pp) for lab, pp in outside if pp <= data_span / 2.0]
-                if findable:
-                    _o, fix = core.period_range_check(findable, lo_now, hi_now)
-                    period_lines.append(f"Range   {what} outside the search ({lo_now:g}–{hi_now:g} d)")
-                    verdict_checks["outside"] = what
-                    cautions.append(f"The search ({lo_now:g}–{hi_now:g} d) cannot find {what}: the best peak above is "
-                                    "another period. Widen the Period search (the button in the Period box) and "
-                                    "refit.")
-                    self._period_range_fix = fix
-                else:
-                    period_lines.append(f"Range   {what} outside the search; the data span {data_span:.1f} d, "
-                                        "too short for it")
-                    cautions.append(f"{what} lies outside the search, and the data span only {data_span:.1f} d: "
-                                    "under two cycles, so no search can find it yet. Add nights.")
+                # 332 d on 3 nights): a plain row says so. (One short enough was covered before the search.)
+                period_lines.append(f"Range   {what} is outside the search: these points span {data_span:.1f} d, "
+                                    "under two cycles, too short to test it. Add nights.")
             if getattr(self, "_period_bins_note", ""):
                 period_lines.append(self._period_bins_note)
             # 2.3.1 (nit): on one short night the peak is already "not reliable"; a day alias or the search's edge
@@ -25647,10 +26079,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 cautions.append(am_text + (" " + am_check["why"] if am_check.get("why") else
                                            " The period survives with the trend taken out and without the "
                                            "high-airmass nights."))
+            elif am_trend.get("skip") == "no airmass":
+                # 2.4.0 fit-in F4 (sheet sweep, m490): a plain row where the period is read (the Log says it once)
+                period_lines.append("Airmass not checked (no site or RA/Dec)")
             edge_text = core.period_edge_text(self.period) if not too_short else ""
             if edge_text:
+                # 2.4.0 fit-in F4 (8c): a plain row (no ⚠ line under the boxes); the verdict row still counts it
                 verdict_checks["edge"] = True
-                cautions.append(edge_text)
+                period_lines.append("Edge    " + edge_text)
             if math.isfinite(baseline) and p > baseline / 1.5 and not too_short:
                 verdict_checks["short_span"] = True
                 cautions.append(f"The data span only {baseline:.2f} d, under 1.5 cycles of the best period; it is not "
@@ -25668,6 +26104,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         period_lines.append(f"Marked  {m:g} d → power {np.interp(f, freqs[order], power[order]):.2f}")
                     else:
                         period_lines.append(f"Marked  {m:g} d (outside the search)")
+        elif getattr(self, "_period_error", ""):
+            # 2.4.0 fit-in F4 (sheet sweep, m487): the reason in plain words, where the period is read
+            ax.set_title("No period search")
+            period_lines = [period_verdict_line(None, {"no_search": f"no search: {self._period_error}. Check the "
+                                                                    "Period search range"})]
         else:
             ax.set_title("Not enough points for a period")
             period_lines = [period_verdict_line(None, {"no_search": "needs at least 8 usable points"})]
@@ -25871,7 +26312,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.caution_text = StringVar(value="")
         self.caution_label = ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500,
                                        justify=LEFT)
-        for var in (self.spread_text, self.caution_text):
+        # 2.4.0 fit-in F4 (sheet sweep, x119): a plain line between the two (old nights keep their old error bars)
+        self.note_text = StringVar(value="")
+        self.note_label = ttk.Label(holder, textvariable=self.note_text, style="Card.TLabel", wraplength=1500,
+                                    justify=LEFT)
+        for var in (self.spread_text, self.note_text, self.caution_text):
             var.trace_add("write", lambda *_a: self._show_summary_lines())
         self._show_summary_lines()
 
@@ -25885,6 +26330,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     spread.pack(anchor=W, pady=(2, 0), after=self._summary_table_row)
             elif spread.winfo_manager():
                 spread.pack_forget()
+            note = getattr(self, "note_label", None)
+            if note is not None:
+                if self.note_text.get().strip():
+                    if not note.winfo_manager():
+                        if caution.winfo_manager():
+                            note.pack(anchor=W, before=caution)
+                        else:
+                            note.pack(anchor=W)
+                elif note.winfo_manager():
+                    note.pack_forget()
             if self.caution_text.get().strip():
                 if not caution.winfo_manager():
                     caution.pack(anchor=W)   # last in the holder: under the spread line when both show
@@ -26154,8 +26609,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _fill_summary(self, series_lines, period_lines, color_lines, rows, cautions):
         # 2.2.3: kept so Save plot PNG can draw the same blocks above the plots.
+        note, self._output_note = getattr(self, "_output_note", ""), ""   # (x119) said by this draw only
         self._summary_snapshot = {"series": list(series_lines), "period": list(period_lines),
-                                  "color": list(color_lines), "rows": [dict(r) for r in rows], "cautions": list(cautions)}
+                                  "color": list(color_lines), "rows": [dict(r) for r in rows],
+                                  "cautions": list(cautions), "notes": [note] if note else []}
+        if hasattr(self, "note_text"):
+            self.note_text.set(note)
         self.summary_vars["series"].set("\n".join(series_lines))
         period_before = self.summary_vars["period"].get()
         self.summary_vars["period"].set("\n".join(period_lines))
@@ -26438,12 +26897,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if isinstance(entries, list):
                 have = self.reports_sent.setdefault(str(night), [])
                 have.extend(e for e in entries if isinstance(e, dict) and e not in have)
+        own_comps = ""
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
                 self._recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
             except ValueError as exc:
-                self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}. Its nights keep the comps "
+                         "they were saved with: open Use comps… (Output page) and press Apply to put every night "
+                         "on the same comps.")   # 2.4.0 fit-in F4 (sheet sweep): says what to do
+                own_comps = (" ⚠ Its nights keep their own comps: expect an offset. Open Use comps… and press "
+                             "Apply.")   # (m530) stays on the status line, after "Added …"
         for night, info in (meta.get("color_cal") or {}).items():
             self.color_cal.setdefault(night, info)
         for night, info in (meta.get("night_binning") or {}).items():
@@ -26462,8 +26926,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except OSError as exc:
                 saved = self.series_not_saved(exc)
         nights = sorted({o.night for o in self.observations})
-        self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}")
-        self._warn_legacy(legacy, os.path.basename(path))
+        self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}"
+                        + own_comps)
+        self._warn_legacy(legacy, os.path.basename(path), path)
 
     def edit_night_note(self):
         # 2.4.0 fit-in F2 (m534, m535, John 24 Nov): the note is for the night chosen in the night table (the
@@ -27636,12 +28101,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 self._recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
             except ValueError as exc:
-                self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
+                self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}. "
+                         "The night keeps tonight's catalog magnitudes, so it may sit off the other nights: open "
+                         "Use comps… (Output page) and press Apply.")   # 2.4.0 fit-in F4 (sheet sweep)
+        # 2.4.0 fit-in F4 (sheet sweep, m540): one line says it; each star's detail is in the Log only
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
             self.log(f"{old} is {new} (same star): series name"
                      + (f" and {bw} {mag:.3f}" if mag is not None and new in self.comps_used
-                        and not plan.get("band_mismatch") else "") + " used.")
+                        and not plan.get("band_mismatch") else "") + " used.", keep_status=True)
+        if plan["renamed"]:
+            n_ren = len(plan["renamed"])
+            self.log(f"Series names and magnitudes used for {n_ren} star{'s' if n_ren != 1 else ''} measured under "
+                     "another name tonight (same star; the Log lists them).")
         # 2.4.0 fit-in F3 (m541/m543): the why is said once, in the line of the comp with the largest shift; the
         # other comps go to the Log only, and the old "(The series' catalog magnitude wins …)" tail is gone.
         remags = sorted(((name, t, s) for name, (t, s) in (plan.get("remag") or {}).items()
@@ -27833,9 +28305,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         aliases = self._star_aliases()
         missing = [n for n in selection if catalog.get(n) is None]
         if missing:
-            # 2.4.0 fit-in F4 (m549): where to type it
-            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.\n\nType it in the "
-                                            "Catalog mag column of this window (Use comps…), or untick the star.")
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.\n\nType "
+                                            f"{'its' if len(missing) == 1 else 'their'} magnitude in the Catalog "
+                                            "mag column, or untick "
+                                            f"{'that star' if len(missing) == 1 else 'those stars'}.")
             return False
         no_base = sum(1 for o in self.observations if not math.isfinite(o.target_inst))
         if no_base:
@@ -28215,6 +28689,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         for night_key, line in zip(sorted(zp["warn"]), zp["text"]):
             if night is None or night_key == night:
+                # (sheet row m621 asked for a plain Log copy: not done. This ⚠ line is the run's finding: it is what
+                # lists the caution in the Findings panel and opens it after the run, _run_summary.)
                 self.log("⚠ Ensemble zero point, " + self.label_nights(line))
     def show_extremum(self):
         """2.2.14 (item 13): the time of maximum / minimum window for the loaded series."""
@@ -28242,7 +28718,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             )
             return
         if result.get("too_few"):
-            messagebox.showinfo(APP_TITLE, "The health check needs at least two stars (two comps, or a comp and a check star).")
+            # 2.4.0 fit-in F4 (sheet sweep, m621): says what to do
+            messagebox.showinfo(APP_TITLE, "The health check needs at least two stars (two comps, or a comp and a "
+                                           "check star). Mark a second comp or a check star on the Photometry page "
+                                           "and run photometry again.")
             return
         result["positions"] = self._star_positions(result)
         result["zero_point"] = self._zero_point_check()   # 2.2.14 (item 10)
@@ -28560,6 +29039,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._aavso_spelling()
         self._save_aavso_report()
 
+    def _legacy_report_stop(self, points) -> bool:
+        """2.4.0 fit-in F4 (sheet sweep, m520): True (and said) when the report would hold a night reduced by an
+        early version that binned before the debayer: its filter and colors are not real, so it is not reported."""
+        bad = sorted({o.night for o in points if o.night in getattr(self, "legacy_mixed", set())})
+        if not bad:
+            return False
+        names = ", ".join(self.night_label(n, short=True) for n in bad)
+        text = (f"Report not saved: {names} {'was' if len(bad) == 1 else 'were'} reduced by an early version of "
+                "SHOBS-P that binned before the debayer, so the filter and colors of "
+                f"{'that night' if len(bad) == 1 else 'those nights'} are not real. Run photometry on "
+                f"{'it' if len(bad) == 1 else 'them'} again (or use Remove night…), or choose another night in the "
+                "Saving box.")
+        self.log("✖ " + text)
+        messagebox.showerror(APP_TITLE, text)
+        return True
+
     def _save_aavso_report(self) -> bool:
         """The rest of save_aavso. True when the report was written.
         2.4.0 fit-in F3 (area L, John's call 4): the gate is split. What WebObs will reject (webobs_rejects) is
@@ -28583,11 +29078,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         points = [o for o in self._usable() if scope == "series" or o.night == self.highlight_night]
         in_transit = len(points) - len(self._report_points(points))
         points = self._report_points(points)   # 2.2.15 (item 1, review)
+        if self._legacy_report_stop(points):
+            return False
         if in_transit:
             self.log(f"AAVSO report: {in_transit} frame{'s' if in_transit != 1 else ''} in a planet transit left out "
                      "of the report.")
         if not points:
-            messagebox.showinfo(APP_TITLE, "No usable points to report for that choice.")
+            # 2.4.0 fit-in F4 (sheet sweep): says why and what to do
+            messagebox.showinfo(APP_TITLE, "No usable points to report for that choice: every point of it is "
+                                           "flagged, trimmed or inside a planet's transit. Choose another night or "
+                                           "the whole series in the Saving box, or untick Leave flagged points out.")
             return False
         # 2.2.18 (item 10): saving never warns about duplicates any more; Open AAVSO WebObs… does (an upload is what
         # duplicates, and many reports are never uploaded: HD 219134's go to Dr. Elliott).
@@ -29232,8 +29732,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             initialvalue=guess, parent=self)
         name = " ".join((answer or "").split())
         if not name or placeholder_star_name(name):
-            messagebox.showinfo(APP_TITLE, "Report not saved: it needs the check star's name (its AUID or catalog "
-                                           "name). Save it again and type the name.")
+            # 2.4.0 fit-in F4 (sheet sweep, m605): the status line and the Log, no box after a Cancel
+            self.log("Report not saved: it needs the check star's name (its AUID or catalog name). Press Save AAVSO "
+                     "report again and type the name.")
             return False
         self.report_names[used] = name
         self.log(f"AAVSO report: check star {used} reported as {name}.")
@@ -29325,13 +29826,27 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # 2.2.19 (r2: S4): the worker writes from a snapshot taken here, so Use comps, catalog magnitudes or
             # Remove night recomputing the observations in place while it writes cannot mix old and new rows.
             import copy
-            obs, notes, scint = copy.deepcopy(obs), copy.deepcopy(notes), copy.deepcopy(scint)
-            # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's frame-label
-            # column reads the frame folders' headers); the whole series when no night is highlighted, as before.
-            self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint),
-                                     f"light-curve CSV ({len(obs)} points, {self._scope_words(scope)})")
+            # 2.4.0 fit-in F4 (#100 item 4, #116): the snapshot has to be taken on the window's own thread, and on
+            # a long series it takes a second or two: the busy bar is up before it starts, not only once the
+            # worker has run for a moment.
+            what = f"light-curve CSV ({len(obs)} points, {self._scope_words(scope)})"
+            tok = None
+            if len(obs) >= self.CSV_BAR_POINTS:
+                tok = self.busy_begin(f"Saving the {what}…")
+                self._busy_show_now()
+            try:
+                obs, notes, scint = copy.deepcopy(obs), copy.deepcopy(notes), copy.deepcopy(scint)
+                # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's
+                # frame-label column reads the frame folders' headers); the whole series when no night is
+                # highlighted, as before.
+                self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint), what)
+            finally:
+                if tok is not None:
+                    self.busy_end(tok, soon=True)   # the worker's own bar takes over without a flicker
             self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
         return path or ""
+
+    CSV_BAR_POINTS = 2000   # Save light-curve CSV: from this many points the busy bar is up before the snapshot
 
     def _save_in_background(self, path: str, write, what: str, asked: bool = True):
         """2.2.19 (nit): run write() (no Tk, no on-screen figure) in a worker thread. A save that is done within a
@@ -29468,9 +29983,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         table_h = (len(rows) + 1.5) * line_in
         # 2.2.14 review: the cautions wrapped to the picture's width (one long line was clipped at the right).
         caution_lines = []
-        if snap.get("cautions"):
+        if snap.get("cautions") or snap.get("notes"):
             from transit_ui import wrap_to_width
-            for c in snap["cautions"]:
+            for c in snap.get("notes") or []:   # 2.4.0 fit-in F4 (x119): a plain note, no mark
+                caution_lines += wrap_to_width(c, 0.97 * width_in * dpi, 8, dpi=dpi)
+            for c in snap.get("cautions") or []:
                 caution_lines += wrap_to_width("! " + c, 0.97 * width_in * dpi, 8, dpi=dpi)
             caution_lines = caution_lines[:14]
         extra = (len(caution_lines) * 0.8 + 0.7 if caution_lines else 0) * line_in + 0.55
@@ -30337,6 +30854,14 @@ class ExtremumWindow:
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
         self.saved_button.grid(row=2, column=7, sticky=W, padx=(6, 0))
         ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=2, column=8, sticky=W, padx=(6, 0))
+        # 2.4.0 fit-in F4 (nit, John 15 Nov): the list and the diagram already show every saved time against the
+        # elements in the boxes; this writes those O−C values into the CSV too (the file as it was is kept).
+        self.store_oc_button = ttk.Button(form, text="Store O−C of all saved times with these elements",
+                                          command=self.store_oc)
+        self.store_oc_button.grid(row=3, column=1, columnspan=7, sticky=W, pady=(2, 0))
+        app.gate(self.store_oc_button, self._store_oc_why, busy=False,
+                 tip="Writes the O−C of every saved time of this star against the Period and Epoch above into the "
+                     "times CSV (cycle, O−C, period, epoch). The file as it was is kept beside it first.")
         self.result_text = StringVar(value="Choose the night and press Measure.")
         ttk.Label(top, textvariable=self.result_text, font=(core.MONO_FONT, 10), style="Card.TLabel",
                   justify=LEFT).pack(anchor=W, pady=(6, 4))
@@ -30389,6 +30914,10 @@ class ExtremumWindow:
     def _elements_redraw(self):
         self._redraw_job = None
         try:
+            self.app.gates.refresh()   # 2.4.0 fit-in F4: Store O−C follows the boxes
+        except Exception:
+            pass
+        try:
             if not self.win.winfo_exists():
                 return
         except Exception:
@@ -30398,15 +30927,33 @@ class ExtremumWindow:
 
     # -- inputs ---------------------------------------------------------------------------
     def _elements(self):
-        """(period, epoch) as floats, or (None, None) when either is missing or unreadable."""
+        """(period, epoch) as floats, or (None, None) when either is missing or unreadable.
+        2.4.0 fit-in F4 (nit, 11 Nov): an epoch pasted with its label ("JD 2461353.81255", "HJD=…", "BJD_TDB …") is
+        read (core.parse_epoch); it was silently ignored, and with it the O−C."""
         try:
-            p = float(self.period.get())
-            e = float(self.epoch.get())
+            p = float(self.period.get().strip().replace(",", "."))
         except ValueError:
             return None, None
-        if not (p > 0 and 2400000.0 < e < 2600000.0):
+        e = core.parse_epoch(self.epoch.get())
+        if e is None or not (p > 0 and 2400000.0 < e < 2600000.0):
             return None, None
         return p, e
+
+    def _elements_problem(self) -> str:
+        """'' when the Period and Epoch boxes are both empty or both read; else what is wrong, in plain words."""
+        ptxt, etxt = self.period.get().strip(), self.epoch.get().strip()
+        if not ptxt and not etxt:
+            return ""
+        if self._elements() != (None, None):
+            return ""
+        if etxt and core.parse_epoch(etxt) is None:
+            return (f"Epoch '{etxt}' is not a Julian Date: type it as 2461353.81255 (a leading JD, HJD or BJD is "
+                    "fine). No O−C until then.")
+        if etxt and not (2400000.0 < core.parse_epoch(etxt) < 2600000.0):
+            return f"Epoch {etxt} is not a full Julian Date (2 400 000 to 2 600 000). No O−C until then."
+        if ptxt and not etxt:
+            return ""   # a period alone is fine: it serves the error (the source line says so)
+        return "Period is not a number of days. No O−C until then."
 
     def _typed_period(self):
         """2.4.0 step 8 (#90): the Period box alone (no epoch needed), or None."""
@@ -30559,6 +31106,12 @@ class ExtremumWindow:
             return
         kind = "max" if self.kind.get() == "maximum" else "min"
         period, epoch = self._elements()
+        try:   # 2.4.0 fit-in F4 (nit): an unreadable Epoch is said, never ignored
+            problem = self._elements_problem()
+            if problem:
+                self.source.set(problem)
+        except Exception:
+            pass   # the words are extra: Measure itself never depends on them
         hw = None
         if self.window_min.get().strip():
             try:
@@ -30650,7 +31203,8 @@ class ExtremumWindow:
                 results.append(r)
             except ValueError as exc:
                 problems.append(str(exc))
-        ra, dec, lat, lon = job["coords"]
+        problems = list(dict.fromkeys(problems))   # 2.4.0 fit-in F4 (nit, 17 Nov): each reason once (two predicted
+        ra, dec, lat, lon = job["coords"]           # times in a night gave "not covered on both sides" twice)
         for r in results:
             # The period the error really used (None when there was none, or the noise model could not be fitted).
             r["noise_asked"], r["noise_source"], r["noise_why_not"] = noise_p, noise_source, noise_why_not
@@ -30836,6 +31390,35 @@ class ExtremumWindow:
                 f"\n   … and {more} earlier" if more > 0 else "")
         self.csv_text.set(text)
 
+    def _store_oc_why(self) -> str:
+        if self._elements() == (None, None):
+            return "Type a Period and an Epoch first (or press Elements from VSX)."
+        if not self._csv_rows():
+            return f"No saved times of {self._star()} yet."
+        return ""
+
+    def store_oc(self):
+        """2.4.0 fit-in F4 (nit): core.rewrite_extremum_oc for this star, with the elements in the boxes."""
+        period, epoch = self._elements()
+        path = self._default_csv()
+        if not (period and epoch and path):
+            return
+        try:
+            got = core.rewrite_extremum_oc(path, self._star(), period, epoch, self.system.get(),
+                                           self._elements_source(period, epoch))
+        except (OSError, ValueError) as exc:
+            text = f"O−C not stored: {exc}."
+            self.source.set(text)
+            self.app.log(text, keep_status=True)
+            return
+        text = (f"O−C of {got['rows']} saved time{'s' if got['rows'] != 1 else ''} of {self._star()} stored against "
+                f"P {period:.8f}, E {epoch:.5f} ({self.system.get()}) in {os.path.basename(path)}; the file as it "
+                f"was is kept as {os.path.basename(got['backup'])}.")
+        self.app.log(text)
+        self.source.set(f"O−C stored for {got['rows']} saved time{'s' if got['rows'] != 1 else ''}")
+        self._show_csv()
+        self.draw()
+
     def save(self):
         if not self.results:
             return
@@ -30872,7 +31455,10 @@ class ExtremumWindow:
             try:
                 done.append(core.save_extremum_row(path, row))
             except OSError as exc:
-                messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}", parent=self.win)
+                # 2.4.0 fit-in F4 (sheet sweep): says what to do
+                messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}\n\nClose the program that has the "
+                                                "file open (a spreadsheet?), then press Save again; the measured "
+                                                "time is still in this window.", parent=self.win)
                 return
         self.csv_path = path
         self.app.extremum_csv, self.app.extremum_csv_star = path, self._star()
@@ -31241,7 +31827,9 @@ class ExportWindow:
         try:
             save_export_setups(setups)
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not save setups: {exc}", parent=self.win)
+            # 2.4.0 fit-in F4 (sheet sweep): says what it means
+            messagebox.showerror(APP_TITLE, f"Could not save the export setups: {exc}\n\nThe setup still works in "
+                                            "this window; it will not be there next time.", parent=self.win)
             return
         self._setup_names = set(setups)
         self.setup_box.configure(values=sorted(setups))
@@ -31268,7 +31856,10 @@ class ExportWindow:
             lon = float(app.lon.get()) if app.lon.get().strip() else None
             times = core.convert_times(np.array([o.jd for o in points]), setup["time"], ra, dec, lat, lon)
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"Time conversion: {exc}", parent=self.win)
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"The times could not be converted to {setup['time']}: {exc}\n\nHJD and "
+                                            "BJD need the target's RA/Dec and the site (Input page); JD needs "
+                                            "neither.", parent=self.win)
             return
         if path is None:
             base = (app.star_id.get() or "target").replace(" ", "_")
@@ -31579,9 +32170,8 @@ class ScanView:
         # 2.2.19 (#19): known variables whose VSX period lies outside the period search, with a one-click fix.
         self.range_frame = ttk.Frame(top, style="Card.TFrame")
         self.range_text = StringVar(value="")
-        ttk.Label(self.range_frame, textvariable=self.range_text, style="Warn.TLabel").pack(side=LEFT)
-        self.range_button = ttk.Button(self.range_frame, text="", command=self._apply_range_fix)
-        self.range_button.pack(side=LEFT, padx=(8, 0))
+        # 2.4.0 fit-in F4 (8c): a plain line (the search follows the known period by itself): no ⚠ style, no button
+        ttk.Label(self.range_frame, textvariable=self.range_text, style="Hint.TLabel").pack(side=LEFT)
         self._range_fix = None
         self._range_packed = False
         self._range_before = nav
@@ -31759,7 +32349,11 @@ class ScanView:
         if getattr(self, "selected", None) is not None:
             self._sync_tree()   # the shown star's row selected again after the refill
     def _update_range_note(self):
-        """2.2.19 (#19): say when known variables in the list have VSX periods outside the scan's period search."""
+        """2.2.19 (#19): known variables in the list whose VSX periods lie outside the scan's period search.
+        2.4.0 fit-in F4 (#79 item 8c, RESULTS-CHANGING for those stars' Best period): the search follows the known
+        period. Such a star is searched again over a range widened to hold its VSX period (its own periodogram
+        only; the scan's range and every other star are untouched), and a plain line says so. A VSX period longer
+        than half the scan's span cannot be tested by any range: a plain line says that instead. No ⚠, no button."""
         frame = getattr(self, "range_frame", None)
         if frame is None:
             return
@@ -31768,16 +32362,54 @@ class ScanView:
         vsx = r.get("vsx")
         expected = []
         if rng and vsx is not None:
-            for i in set(self.rows.values()):
+            for i in sorted(set(self.rows.values())):
                 hit = vsx[i] if i < len(vsx) else None
                 if hit and hit.get("period"):
-                    expected.append((hit.get("name", "VSX"), hit.get("period")))
-        outside, fix = core.period_range_check(expected, float(rng[0]), float(rng[1])) if expected else ([], None)
-        self._range_fix = fix
-        if outside:
-            names = ", ".join(f"{n} {p:.4g} d" for n, p in outside[:3]) + (" …" if len(outside) > 3 else "")
-            self.range_text.set(f"⚠ VSX period outside the search ({rng[0]:g}–{rng[1]:g} d): {names}.")
-            self.range_button.configure(text=f"Search {fix[0]:g}–{fix[1]:g} d instead")
+                    expected.append((i, hit.get("name", "VSX"), hit.get("period")))
+        widened, too_long = [], []
+        if expected:
+            try:
+                jd = np.asarray(r["jd"], dtype=float)
+                span = float(np.nanmax(jd) - np.nanmin(jd)) if jd.size else 0.0
+            except Exception:
+                jd, span = None, 0.0
+            for i, name, p in expected:
+                got = core.period_range_follow(float(rng[0]), float(rng[1]), [(name, p)], span)
+                too_long += got["too_long"]
+                if not got["widened"] or jd is None:
+                    continue
+                own = (got["lo"], got["hi"])
+                widened.append((name, float(p), own))
+                per = (r.get("periods") or {}).get(i)
+                if per and tuple(per.get("range") or ()) == own:
+                    continue   # searched over its own range already
+                try:
+                    lc = np.asarray(r["light_curves"], dtype=float)[:, i]
+                    good = np.isfinite(lc)
+                    ls = core.lomb_scargle(jd[good], lc[good], own[0], own[1])
+                except Exception:
+                    ls = None
+                if ls:
+                    r.setdefault("periods", {})[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls,
+                                                      "range": own}
+                    for item, k in self.rows.items():   # the row filled a moment ago shows the new search
+                        if k == i:
+                            try:
+                                self.tree.set(item, "period", period_cell(r["periods"][i]))
+                            except Exception:
+                                pass
+        self._range_fix = None
+        parts = []
+        if widened:
+            parts.append("Searched over a wider range to cover the VSX period: "
+                         + ", ".join(f"{n} {p:.4g} d ({own[0]:g}–{own[1]:g} d)" for n, p, own in widened[:3])
+                         + (" …" if len(widened) > 3 else "") + ".")
+        if too_long:
+            parts.append("VSX period too long for this scan to test (under two cycles): "
+                         + ", ".join(f"{n} {p:.4g} d" for n, p in too_long[:3])
+                         + (" …" if len(too_long) > 3 else "") + ".")
+        if parts:
+            self.range_text.set("  ".join(parts))
             if not self._range_packed:
                 frame.pack(fill=X, side="bottom", pady=(4, 0), before=self._range_before)
                 self._range_packed = True
@@ -31786,18 +32418,8 @@ class ScanView:
             self._range_packed = False
 
     def _apply_range_fix(self):
-        fix = self._range_fix
-        app = self.app
-        if not fix:
-            return
-        if app.mode_key != "discovery" or not hasattr(app, "disc_min_period"):
-            app.min_period.set(fix[0])
-            app.max_period.set(fix[1])
-            app.status.set(f"Period search set to {fix[0]:g}–{fix[1]:g} d: run the field scan again to use it.")
-            return
-        app.disc_min_period.set(fix[0])
-        app.disc_max_period.set(fix[1])
-        app._disc_period_changed(force=True)
+        """Kept for old callers: since 2.4.0 fit-in F4 the search follows the known period by itself."""
+        return
 
     def cautions(self, i) -> list[str]:
         """2.2.2: reasons to doubt a candidate before celebrating."""
@@ -31925,9 +32547,11 @@ class ScanView:
             ax.set_xscale("log")
             edge = ls.get("edge")
             # 2.2.19 (nit): a peak at the search edge is not a period ("20 d (edge)" for a drifting star).
-            ax.set_title((f"Lomb-Scargle   {period_cell(per)}  ⚠ peak at the search edge" if edge
+            # 2.4.0 fit-in F4 (8c): plain words in the title, no ⚠ and no red (a peak at the edge is a note; a
+            # known variable is searched over a range that holds its VSX period, see _update_range_note)
+            ax.set_title((f"Lomb-Scargle   {period_cell(per)}  (the peak is at the edge of the search)" if edge
                           else f"Lomb-Scargle   best {per['period']:.4f} d"),
-                         fontsize=10, color="#b00020" if edge else "black")
+                         fontsize=10, color="black")
             ax.set_xlabel("Period (days)")
             ax.set_ylabel("Power")
         else:
@@ -32004,7 +32628,7 @@ class ScanView:
             if box:
                 self.selected = box[0]
                 self._sync_tree()   # review: the table shows the star whose curve is drawn
-            self.app.status.set(f"{len(self.picked)} star(s) picked on the scatter plot: Mark on image shows them.")
+            self._say_picked()
             self.draw()
             return
         # Distance in plot units: magnitude on x, log scatter on y.
@@ -32021,12 +32645,27 @@ class ScanView:
                 self.selected = k
         elif k == self.selected:
             self.clear_selection()   # 2.2.19 (#13): a second click clears
+            self._say_picked()
             return
         else:
             self.selected = k
             self.picked = [k]
         self._sync_tree()
+        self._say_picked()
         self.draw()
+
+    def _say_picked(self):
+        """2.4.0 fit-in F4 (nit, 14 Nov): the status line counts the picked stars after every pick (a click, a
+        Ctrl+click, a drag), as the plot's legend does. It used to be written only after a drag, so a click after
+        an empty drag left "0 star(s) picked" beside the legend's "picked (1)"."""
+        ok = set(int(k) for k in self._plot_points())
+        n = len([k for k in self.picked if k in ok])   # the ones drawn (the legend's count)
+        if n == 0:
+            self.app.status.set("No star picked on the scatter plot.")
+        elif n == 1:
+            self.app.status.set("1 star picked on the scatter plot: Mark on image shows it.")
+        else:
+            self.app.status.set(f"{n} stars picked on the scatter plot: Mark on image shows them.")
 
     def _sync_tree(self):
         """Select the table row of the selected star (when it has one), without starting another redraw."""
@@ -32280,6 +32919,12 @@ class ScanView:
         """<field>_<filter>_<date>_SHOBS-P_scan, the 2.2.5 file-name pattern (2.2.9)."""
         app = self.app
         field = (app.star_id.get() or "").strip() or "field"
+        if app.mode_key == "discovery":
+            # 2.4.0 fit-in F4 (nit, 20 Oct): Discovery has no Star ID box, so the name left in it by another mode
+            # (the last variable or planet host) no longer names the scan's files. They take the field folder's
+            # name, as the night's suspects file does (core.suspects_field_name), else "field".
+            field = core.suspects_field_name(str((self.r.get("suspects_where") or {}).get("folder")
+                                                 or app.output_dir.get()).strip(), "")
         jds = self._scan_jds()
         date = ""
         if jds:

@@ -125,7 +125,7 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | **Fit** | **Period search (days)**, **Period from**, and the colored **Refit period** button (chapter 13) |
 | **Comps** | **Comp health…**, **Use comps…** (chapter 11) |
 | **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
-| **View** | **Time axis**, **Bin**, **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
+| **View** | **Time axis**, **Plot bins** (called **Bin** until 2.4.0; it bins the plot only), **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
 
 Hover over a row's label to read what the row is for. A button that cannot work yet is greyed, and hovering over it says why (from 2.4.0): with no light curve, every button that needs one (**Save series**, the saves under the plots, **Export…**, **Comp health…**, **Use comps…**, **Time of max/min…**) is greyed; **Night notes…** and **Remove night…** wait for a night chosen in the night table; and while a step runs (the busy bar), the buttons that start or change one are greyed until it ends. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**, so you can see that it did. On a narrow window a row wraps onto a second line.
 
@@ -165,7 +165,7 @@ Two lines can appear under the table: the spread of the nightly means (with two 
 
 ### The four plots
 
-- **Top left, the light curve.** One color per night. Gray **×** are flagged points, left out. Points ringed **○** come after a meridian flip. If you choose a **Bin** (for example **Night** or **30 min**), black **◆** show the binned means. The **Time axis** box switches between **JD**, **UTC** and **Local time**. Local time is the site's (the **Time zone** in the Site box), and the axis says its offset, for example **Local time (UTC−5)**. Hover over a point to see its details.
+- **Top left, the light curve.** One color per night. Gray **×** are flagged points, left out. Points ringed **○** come after a meridian flip. If you choose **Plot bins** (for example **Night** or **30 min**), black **◆** show the binned means. The **Time axis** box switches between **JD**, **UTC** and **Local time**. Local time is the site's (the **Time zone** in the Site box), and the axis says its offset, for example **Local time (UTC−5)**. Hover over a point to see its details.
 - **Top right, the phase plot.** The used points folded on the best period from the periodogram. Its title says **Folded** only when the period is significant; otherwise it says **Best peak (not significant)**. Chapter 13 explains.
 - **Bottom left, the check star.** It should be flat. Its title gives its scatter and catalog magnitude.
 - **Bottom right, the periodogram** (Lomb-Scargle). See chapter 13.

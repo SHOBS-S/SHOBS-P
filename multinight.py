@@ -908,11 +908,8 @@ def timing_statements(a: dict) -> list:
         elif eph.get("t0_err") is not None and abs(m) <= 2.0 * float(np.mean(epe)):
             out.append(("info", f"Against {name} all {n} nights run {'late' if m > 0 else 'early'} by "
                                 f"{m:+.1f} ± {sm:.1f} min on average (fit errors only), and {agree}. The offset is within "
-                                f"what that ephemeris can predict ({eph_txt} at these epochs), so it is most likely "
-                                "the ephemeris, not the data (a constant offset can also come from a clock or "
-                                "time-system error, e.g. exposure start instead of mid, or JD_UTC labeled BJD_TDB). "
-                                "A current ephemeris (e.g. Exoplanet Watch's or ExoClock's, typed as the alternative) "
-                                "settles it."))
+                                f"what that ephemeris can predict ({eph_txt} at these epochs): most likely the "
+                                "ephemeris, not the data."))   # 2.4.0 fit-in F4 (sheet row m662): two sentences
         elif eph.get("t0_err") is None:
             out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), and {agree}. That ephemeris states no uncertainty, "

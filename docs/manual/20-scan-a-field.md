@@ -167,7 +167,7 @@ than that.
 
 To scan the stacks, set **Stack N** and press **Stack**. SHOBS-P makes the stacks, then runs the field scan on them
 instead of the single frames. A scan needs at least 10 stacks; with fewer, **Stack** says *"That makes only K stacks;
-a field scan needs at least 10. Use a smaller N."* The per-frame scan is kept: the **Points** box (**Per frame** /
+a field scan needs at least 10. Use a smaller N: N = 4 is the largest that gives 10 or more."* The per-frame scan is kept: the **Points** box (**Per frame** /
 **Stacked**) on the Stack row switches between the two scans.
 
 ![The Discovery Photometry page with the optional Stacking line](img/20-discovery-stack-row.png)
@@ -223,9 +223,13 @@ Click a row to draw that star. You can select several rows. Click the selected r
 the selection.
 
 > **Tip:** The period search range comes from the **Period search (days)** boxes in **Scan settings** (0.02 to 20
-> days by default). See "The scan settings" above. When a known variable in the list has a VSX period outside that
-> range, an orange line under the table says so (**⚠ VSX period outside the search (…): …**), with a button such as
-> **Search 0.02–40 d instead** to widen it in one click.
+> days by default). See "The scan settings" above. From 2.4.0 the search follows the known period: when a known
+> variable in the list has a VSX period outside that range (or right at its edge), SHOBS-P searches that one star
+> again over a range that holds its VSX period, and a plain line under the table says so, for example **Searched over
+> a wider range to cover the VSX period: V1 0.9 d (0.02–1.1 d).** Only that star's **Best period** and periodogram
+> change; the scan's range and the other stars stay as they are. A VSX period longer than half the scan (under two
+> cycles) cannot be tested by any range; the line then reads **VSX period too long for this scan to test (under two
+> cycles): …**. There is no ⚠ and no button any more.
 
 ### Check first
 
@@ -235,7 +239,8 @@ The **Check first** column lists warnings that often explain a suspect away:
 - **clipped on 1 frame: check linearity**: the star's raw core reached saturation on one frame (or a few, for a star
   not counted as saturated).
 - **blended neighbor: check**: a neighbor's light reaches the aperture (see "The scan settings").
-- **VSX period … d outside the search**: a known variable whose period the search could not find.
+- **Searched over a wider range to cover the VSX period: …** / **VSX period too long for this scan to test …**
+  (a plain line under the table, from 2.4.0): see the Tip above.
 - **change begins at flip: check** / **change begins at re-center: check** / **change begins after a gap: check**:
   the light curve changes level at a flip, rotator move, re-center or gap, which points at the instrument rather
   than the star.
@@ -320,7 +325,9 @@ The **Results** row holds the buttons below. Before the first scan the page show
 *Scan the field first (Scan field on the Photometry page).*); they come live when a scan lands.
 
 - **Save plot PNG…**: the three plots with a one-line summary, `<field>_<filter>_<date>_SHOBS-P_scan.png`
-  (`<field>` is the Input page's Star ID if one is left from another mode, otherwise `field`).
+  (from 2.4.0 `<field>` is the field folder's name, the same as in the night's suspects file: the folder that holds
+  the night's folder, as in `W:\Variables\<field>\<night>\Output`; otherwise `field`. A Star ID left over from
+  another mode no longer names Discovery's files).
 - **Save CSV…**: one row per measured star (position, magnitude, scatter, expected scatter, excess, excess χ²ν,
   suspect rank and kind, period, VSX name).
 - **Export suspects CSV…**: one row per suspect, with both test values, why it is a suspect, its Gaia DR3 ID, how many

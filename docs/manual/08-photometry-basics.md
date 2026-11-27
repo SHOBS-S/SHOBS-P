@@ -268,7 +268,10 @@ frame edge, no catalog magnitude in this band, a color far from the target's. Be
 - for a comp or check star near the frame edge, how far in a star must be, for example "⚠ only 12 px from the frame
   edge: its sky ring (out to 22 px) needs the star at least 27 px in, with room for drift — pick a star further in".
   For the check star it also names a suggested comp ring farther in, for example "…; S2 (TYC 3089-883-1) is farther
-  in and would make a good check".
+  in and would make a good check". A star that is clear of that but still inside 3 × the sky-out radius gets a
+  shorter line ("⚠ 40 px from the frame edge: stars at least 66 px in … stay clear of the edge and the weakest part
+  of the flat") only while the night's drift has not been checked. Once it has (2.4.0), a star that keeps its sky
+  ring on the frame all night gets no edge line at all.
 - (2.4.0) for a comp or check star that is fine on this frame but **drifts toward or off the edge later in the
   night**, the frames where it happens, for example "⚠ drifts toward the frame edge later in the night: 60 px in on
   this frame, but only 32 px on frame #2; stars at least 36 px in all night (3 × the sky-out radius) stay clear of
@@ -957,7 +960,7 @@ runs; hover over it to see why. It asks first only when it needs to:
 - in Transits mode, fewer than 20 stacks: *"That makes only K stacked points; the transit fit needs 20 or more. Stack
   anyway?"*;
 - in Discovery, fewer than 10 stacks stops with *"That makes only K stacks; a field scan needs at least 10. Use a
-  smaller N."*
+  smaller N: N = 4 is the largest that gives 10 or more."* (the message names the largest N that still works).
 
 Then the busy bar shows two steps: **Stacking… k of K** (each stack is made), then **Photometry on K stacks…** (the
 same photometry runs on the stacks; in Discovery, the field scan does). The log says what was done, for example:

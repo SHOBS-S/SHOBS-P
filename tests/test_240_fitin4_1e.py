@@ -73,17 +73,17 @@ class TestWithAWindow(unittest.TestCase):
         app._findings_show_log()
         app.update()
         self.assertEqual(app.current_step, clearv_app.STEP_INPUT)
-        box = app._log_win_box
+        box = app._log_window_box()   # merge: F4-2's Log window (the same window F4-1 built)
         self.assertIn("a line said before the window opened", box.get("1.0", "end"))
         app.log("a line said while it is open", keep_status=True)
         self.assertIn("a line said while it is open", box.get("1.0", "end"))
-        win = app._log_win
+        win = box.winfo_toplevel()
         app._findings_show_log()            # a second press: the same window
-        self.assertIs(app._log_win, win)
+        self.assertIs(app._log_window_box().winfo_toplevel(), win)
         win.destroy()
         app.update()
         app.log("after the window closed", keep_status=True)   # no error, and the box is forgotten
-        self.assertIsNone(app._log_win_box)
+        self.assertIsNone(app._log_window_box())
 
     def test_show_log_on_the_photometry_page_shows_that_pages_log(self):
         app = self.app

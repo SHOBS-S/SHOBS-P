@@ -56,11 +56,14 @@ When a night has such a stretch, SHOBS-P asks after photometry:
 
 > N frames of … lost light (…, down to 0.94 mag), but every measured star (comps, check, spares) faded by the same amount, smoothly, with a flat sky: transmission loss (dew/haze?), not cloud.
 >
-> Use these points in the light curve (errors scaled for the lost light), or leave them out?
+> Use these points in the light curve, or leave them out?
+>
+> “Use these points”: they go into the light curve with larger error bars (0.012 mag added for the scatter measured in that stretch).
+> “Leave them out” (the default; also Escape or closing this window): they stay flagged, like cloud.
 
 ![The Keep question after a run with dew at the end of the night](img/12-transmission-keep.png)
 
-- **Use these points** keeps the points. Their error bars grow with the light lost, and each kept point also gets the extra star-to-star scatter measured in that stretch, so the errors stay honest.
+- **Use these points** keeps the points. Their error bars grow with the light lost: each frame's photon error comes from its own (reduced) light, and scintillation is a share of the light that arrives. Each kept point also gets the extra star-to-star scatter measured in that stretch (the amount the question names), so the errors stay honest even if it was a smooth cloud bank.
 - **Leave them out** (the default; also Escape or closing the window) leaves them flagged, like cloud.
 
 If you are unsure, choose **Leave them out**. You can change it later. Each answer is written to the log in one line with the night (the log file adds the time), for example "…: transmission loss (dew/haze?) points left out, flagged (asked after photometry)." or "…: transmission loss (dew/haze?) points kept (asked after photometry): errors follow the reduced light plus the star-to-star scatter there."
@@ -69,9 +72,10 @@ If only one star was measured, SHOBS-P cannot tell dew from cloud, so it does no
 
 ### Changing your answer later
 
-1. If the series has more than one night, click the night in the night table first.
-2. Press **Transmission loss…**.
-3. The message says how many frames, when, how deep, and whether they are now used in the light curve or left out. Answer the question again with **Use these points** or **Leave them out**.
+1. Press **Transmission loss…**. With a night chosen in the night table, that night is used. With several such
+   nights and none chosen, a small window asks which night (from 2.4.0; you no longer have to click the night table
+   first): pick it in the **Night** box and press **Choose this night**.
+2. The message says how many frames, when, how deep, and whether they are now used in the light curve or left out. Answer the question again with **Use these points** or **Leave them out**.
 
 Your answer is saved with the series. If no night has transmission loss at the current cloud limit, SHOBS-P says so.
 
@@ -95,8 +99,8 @@ Nothing is said if the star has no known transiting planet, if no frame falls in
 
 To check or change it later:
 
-1. Click the night in the night table if the series has more than one night with transit frames.
-2. Press **Planet transits…**.
+1. Press **Planet transits…**. If several nights have transit frames and none is chosen in the night table, a small
+   window asks which night (from 2.4.0): pick it and press **Choose this night**.
 
 If no night has been checked yet, the button runs the check on every night. Your answer is saved in the series file at once.
 
@@ -203,7 +207,7 @@ A step can also come from the apertures landing beside their stars after the fli
 
 > ⚠ After the meridian flip the C1 and check apertures were off their stars by about (+3.1, −2.4) px together, while the target's was not: an aperture-placement error at the flip, not a change in the stars …
 
-The check star then looks normal and hides the problem. Look at `comp1_x`/`comp1_y` and `check_x`/`check_y` in the light-curve CSV; if they sit off the stars, reduce the frames after the flip on their own.
+The check star then looks normal and hides the problem. The line ends with what to do: reject the frames on one side of the flip on the Blink page and run each side on its own. (The light-curve CSV's `comp1_x`/`comp1_y` and `check_x`/`check_y` columns show where the apertures sat.)
 
 Such a night, or one whose check star steps along with the target, is not saved into an open series without asking (chapter 9, "After the run"). A step the check star and comps do not share is taken as the star's, and the series is saved as usual.
 

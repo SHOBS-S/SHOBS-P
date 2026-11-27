@@ -24,9 +24,16 @@ Choose a range that fits your star and your data:
 
 - The shortest period needs frames closer together than half of it.
 - The longest period your data can really test is about half the span of the data.
-- When the VSX period, or a period you marked, lies outside the range, the Period box says so with a **Range ⚠** line
-  and a caution, and a button such as **Search 0.02–20 d instead** widens the search in one click. A period longer than
-  half the data span gets no button: no search can find it yet, so add nights. On the periodogram, longer periods are shaded gray and labeled **longer than the data can test**. The search still runs there, but a peak in the gray zone is not to be trusted.
+- **The search follows the known period (from 2.4.0).** When SHOBS-P knows a period for the star and it lies outside
+  your range, or right at one end of it, SHOBS-P widens the two boxes to cover it before it searches. The known
+  periods are VSX's (looked up, or kept in the series file), the period of the star's saved times of maximum or
+  minimum (chapter 14), and any period you typed in **Mark periods**. The Period box says so in a plain line, for
+  example **Range   searched 0.02–28 d: widened from 0.02–20 d to cover VSX 22.1 d**, and the Log has the same line.
+  The boxes show the range that was searched. If you narrow them again so that the known period falls outside, they
+  widen again at the next search. Because the range can change, the best period found can change too.
+- A known period longer than half the span of your points cannot be tested by any range (a Mira's 332 d on three
+  nights). The range is left alone and a plain line says **Range   VSX 332 d is outside the search: these points span
+  3.0 d, under two cycles, too short to test it. Add nights.** On the periodogram, longer periods are shaded gray and labeled **longer than the data can test**. The search still runs there, but a peak in the gray zone is not to be trusted.
 
 ### Period from
 
@@ -54,8 +61,14 @@ The pier-side and line-up checkboxes from chapter 12 also affect the search.
 | **Epoch** | The time of the fold's zero phase |
 | **Fold** | Whether the check-star correction is on |
 | **VSX** | The catalog period, when VSX has one. Also drawn as a green dashed line on the periodogram. |
+| **Saved** | The period of the star's saved times of maximum or minimum, when it has some (from 2.4.0). |
 
-Further lines appear when they apply: **Range … outside the search**, **Bins every point used …**, **Check depends on … alone**, **Airmass nightly means follow airmass**, and **Marked …** for periods you asked about. These rows are plain: they give the reasons behind the verdict. Only the **⚠ Doubtful** verdict line itself carries a ⚠.
+The FAP is never printed as zero. With thousands of points it can be smaller than the number format can hold; it then
+reads **< 1e-99**. The FAP counting nights, when it comes from the nightly means, cannot go below a floor set by the
+number of nights (1 in 720 for six nights); a value sitting on that floor says so: **1.4e-03 (the lowest 6 nights can
+show)**.
+
+Further lines appear when they apply: **Range   searched …: widened from … to cover …** or **Range … is outside the search …** (see "Choose a range" above), **Edge …** when the best peak sits at one end of the search and no known period says where to look, **Bins every point used …**, **Check depends on … alone**, **Airmass nightly means follow airmass** (or **Airmass not checked (no site or RA/Dec)** when the airmass is not known, so that check was not made: type the site on the Input page and the target's RA/Dec), and **Marked …** for periods you asked about. These rows are plain: they give the reasons behind the verdict. Only the **⚠ Doubtful** verdict line itself carries a ⚠.
 
 ### The verdict line
 
@@ -99,6 +112,12 @@ If any test fails, the verdict line says why, for example:
 
 The last one is a result too. For a suspected variable, "constant to 0.005 mag" is worth knowing.
 
+SHOBS-P never calls a star constant while a night clearly changes (from 2.4.0). A W UMa star on two short nights
+has no significant period yet, but it may move 0.08 mag within each night. The line then reads **Period  None: no
+significant period: the star does change (0.08 mag within 5–6 Oct 2026; point scatter 0.006 mag), but these nights
+do not pin a period down. Add nights.** The test compares the night cut into six parts with the scatter from one
+point to the next; it is for the wording only and changes no number.
+
 > **Caution:** A periodogram always has a highest peak. **Best peak (not significant)** is *not* the star's period. Do not report it as one.
 
 ## Aliases
@@ -127,7 +146,7 @@ Each appears as a purple dotted line on the periodogram, and the Period box give
 
 ## Other cautions about the period
 
-- **⚠ Doubtful … at the edge of the search**: the best period is at the end of your search range. The true period may lie beyond it, or this is a slow trend. Widen the range and press **Refit period**.
+- **⚠ Doubtful … at the edge of the search**, with a plain **Edge** row under it: the best period is at the end of your search range and no known period says where to look (a known period widens the range by itself, see above). The true period may lie beyond it, or this is a slow trend. The **Edge** row says which box to change: raise the max period or lower the min period, then press **Refit period**. From 2.4.0 this is a row in the Period box, not a ⚠ line under the night table.
 - **The data span only … d, under 1.5 cycles of the best period; it is not pinned down yet.** Add nights.
 
 ## The airmass check

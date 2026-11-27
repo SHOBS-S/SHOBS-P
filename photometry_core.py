@@ -6772,6 +6772,64 @@ def _night_perm_fap(t_mean: np.ndarray, y_mean: np.ndarray, f_lo: float, f_hi: f
     return float((np.sum(powers >= observed - 1e-12) + 1) / (NIGHT_PERM_RANDOM + 1))
 
 
+def in_night_changes(jd, values, nights, min_points: int = 20, chunks: int = 6, nsigma: float = 5.0,
+                     min_mag: float = 0.01) -> list:
+    """2.4.0 fit-in F4 (nit, MP UMa 17 Nov): nights on which the star clearly changes, though no period is
+    significant. The Period box said "the star looks constant at this precision" for a W UMa star that moved
+    0.08 mag in one night, because two short nights cannot pin its period down. For each night with min_points or
+    more points: the point-to-point noise (from the differences of neighbours, so a slow change does not count as
+    noise), the night cut into `chunks` parts in time, and the range of their means. A night changes when that
+    range is over nsigma times the error of a difference of two such means, and over min_mag.
+    Returns [{"night", "range", "noise"}] (largest range first); [] when no night qualifies. Display only."""
+    t = np.asarray(jd, dtype=float)
+    y = np.asarray(values, dtype=float)
+    labels = np.asarray(list(nights))
+    out = []
+    for night in dict.fromkeys(labels.tolist()):
+        sel = (labels == night) & np.isfinite(t) & np.isfinite(y)
+        if int(sel.sum()) < max(min_points, 3 * chunks):
+            continue
+        order = np.argsort(t[sel])
+        yy = y[sel][order]
+        d = np.diff(yy)
+        noise = float(1.4826 * np.median(np.abs(d - np.median(d))) / math.sqrt(2.0))
+        if not (math.isfinite(noise) and noise > 0):
+            continue
+        parts = [p for p in np.array_split(yy, chunks) if p.size >= 3]
+        if len(parts) < 3:
+            continue
+        means = np.array([float(np.mean(p)) for p in parts])
+        n_part = min(p.size for p in parts)
+        rng = float(means.max() - means.min())
+        if rng > max(min_mag, nsigma * noise * math.sqrt(2.0 / n_part)):
+            out.append({"night": night, "range": rng, "noise": noise})
+    return sorted(out, key=lambda r: -r["range"])
+
+
+FAP_SHOWN_FLOOR = 1e-99   # below this a false-alarm probability is printed as "< 1e-99" (it read "0.0e+00")
+
+
+def fap_text(fap, floor=None, nights=None) -> str:
+    """2.4.0 fit-in F4 (nit, John 15 Nov): a false-alarm probability as text. A value too small for the number format
+    (it underflows to 0 on thousands of points) reads "< 1e-99", never "0.0e+00". floor / nights: the permutation
+    test on nightly means cannot go below 1/k!; a value sitting on that floor says so."""
+    try:
+        fap = float(fap)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(fap):
+        return ""
+    if fap < FAP_SHOWN_FLOOR:
+        return "< 1e-99"
+    text = f"{fap:.1e}"
+    try:
+        if floor is not None and math.isfinite(floor) and fap <= floor * (1 + 1e-9):
+            text += f" (the lowest {int(nights)} nights can show)" if nights else " (the lowest this test can show)"
+    except (TypeError, ValueError):
+        pass
+    return text
+
+
 def period_night_fap(jd, values, nights, best: dict, min_period: float, max_period: float) -> dict:
     """2.2.17 (item 10; review): a false-alarm probability that counts nights, as a conservative heuristic next to
     the point FAP (points of a night share offsets from clouds, extinction and calibration, so ten nights cannot give
@@ -6811,6 +6869,10 @@ def period_night_fap(jd, values, nights, best: dict, min_period: float, max_peri
         y_mean = np.array([float(np.mean(y[labels == n])) for n in names])
         f_hi = min(1.0 / min_period, 1.0 / max(2.0 * night_span, 1e-6))
         out.update(method="nightly means", n_eff=float(k), fap=_night_perm_fap(t_mean, y_mean, 1.0 / max_period, f_hi))
+        # 2.4.0 fit-in F4 (nit): the lowest value this test can give (every ordering of k nights, or the random
+        # orderings above 7 nights), so the page can say "the lowest 6 nights can show" beside a FAP that sits on it
+        out["floor"] = (1.0 / math.factorial(k) if 4 <= k and math.factorial(k) <= NIGHT_PERM_EXACT
+                        else 1.0 / (NIGHT_PERM_RANDOM + 1) if k >= 4 else float("nan"))
         return out
     yc = y.copy()
     for n in names:
@@ -6906,7 +6968,9 @@ def lomb_scargle(jd: np.ndarray, mag: np.ndarray, min_period: float, max_period:
     if len(t) < 8:
         return None
     if not (0 < min_period < max_period):
-        raise ValueError("Period search needs 0 < min period < max period")
+        # 2.4.0 fit-in F4 (sheet sweep): shown after "Period search: " on the status line; says what to fix
+        raise ValueError("the min period must be above 0 and below the max period; correct the two Period search "
+                         "boxes")
     ls = LombScargle(t, y, normalization="standard")
     frequency, power = ls.autopower(
         minimum_frequency=1.0 / max_period,
@@ -8314,17 +8378,67 @@ def period_range_check(expected, lo: float, hi: float):
     return out, (new_lo, new_hi)
 
 
+def _round_range(v: float, up: bool) -> float:
+    """v to 2 significant figures, never rounded the wrong way (a widened range must still hold the period)."""
+    r = float(f"{v:.2g}")
+    if up and r < v:
+        r = float(f"{v * 1.05:.2g}")
+    if not up and r > v:
+        r = float(f"{v * 0.95:.2g}")
+    return r
+
+
+def period_range_follow(lo: float, hi: float, known, span_days: float) -> dict:
+    """2.4.0 fit-in F4 (#79 item 8c): the period search follows the known period. known: [(label, days)] (VSX, the
+    series file, the saved times, the marked periods). A known period outside lo-hi, or so close to an end that the
+    search would call it "at the edge" (lomb_scargle: >= 0.9 x max, <= 1.05 x min), widens the range to hold it
+    with room (max 1.25 x the period, min 0.8 x). A period longer than half the data span cannot be tested by any
+    range (a Mira's 332 d on 3 nights): the range is left alone for it and it comes back in "too_long".
+    Returns {"lo", "hi", "widened": [(label, days)] that moved an end, "too_long": [(label, days)]}."""
+    out = {"lo": float(lo), "hi": float(hi), "widened": [], "too_long": []}
+    seen = set()
+    for label, p in known or ():
+        try:
+            p = float(p)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(p) and p > 0) or (label, round(p, 9)) in seen:
+            continue
+        seen.add((label, round(p, 9)))
+        if 1.05 * out["lo"] < p < 0.9 * out["hi"]:
+            continue
+        if not (span_days and math.isfinite(span_days) and p <= span_days / 2.0):
+            if not (lo <= p <= hi):
+                out["too_long"].append((label, p))
+            continue
+        if p >= 0.9 * out["hi"]:
+            out["hi"] = max(out["hi"], _round_range(1.25 * p, up=True))
+        if p <= 1.05 * out["lo"]:
+            out["lo"] = min(out["lo"], _round_range(0.8 * p, up=False))
+        out["widened"].append((label, p))
+    return out
+
+
+def period_range_note(old: tuple, new: tuple, widened) -> str:
+    """The plain line for a search range that followed the known period (Period box row, Log line)."""
+    what = ", ".join(f"{lab} {p:.5g} d" for lab, p in widened)
+    return (f"searched {new[0]:g}–{new[1]:g} d: widened from {old[0]:g}–{old[1]:g} d to cover {what}")
+
+
 def period_edge_text(ls: dict) -> str:
-    """A caution when the best period sits at the edge of the search range, or '' when it does not."""
+    """A plain note when the best period sits at the edge of the search range, or '' when it does not.
+    2.4.0 fit-in F4 (8c): a known period (VSX, the series, the saved times) widens the range by itself, so this is
+    left for a star with no known period; it says what to do and carries no mark."""
     if not ls or not ls.get("edge"):
         return ""
     if ls["edge"] == "max":
         return (f"The best period ({ls['period_days']:.4g} d) is at the long end of the search (max "
-                f"{ls['max_period']:g} d). The true period may be longer, or this is a slow trend rather than a "
-                "period. Raise the max period and refit; longer periods need more nights.")
+                f"{ls['max_period']:g} d), and no known period says where to look. It may be longer, or a slow "
+                "trend and no period at all. To test it, raise the max period and press Refit period; longer "
+                "periods need more nights.")
     return (f"The best period ({ls['period_days']:.4g} d) is at the short end of the search (min "
-            f"{ls['min_period']:g} d). The true period may be shorter; lower the min period and refit "
-            "(the frames must be closer together than half the period).")
+            f"{ls['min_period']:g} d), and no known period says where to look. It may be shorter. To test it, lower "
+            "the min period and press Refit period (the frames must be closer together than half the period).")
 
 
 def aperture_test_stats(mags_by_r: dict, ref_label: str, has_comp2: bool, boot: int = 400, seed: int = 1) -> dict:
@@ -8463,7 +8577,8 @@ def aavso_report(
     star = _field(star_id)
     base_notes = (notes or "").replace(",", ";").replace("|", ";").strip()
     if ensemble:
-        base_notes = (base_notes + "; " if base_notes else "") + "ens " + " ".join(_field(c.name, 15) for c in comps)
+        base_notes = (base_notes + "; " if base_notes else "") + "ens " + " ".join(_field(c.name) for c in comps)   # 2.4.0 fit-in F4 (nit, 15 Nov): each name in
+        # full, as in CNAME / KNAME (30 characters); a cut of 15 shortened "APASS J024816.7+504250" in the notes
     for obs in observations:
         if not math.isfinite(obs.mag):
             continue
@@ -11312,6 +11427,23 @@ def predicted_extrema(t_start: float, t_end: float, period: float, epoch: float,
     return [epoch + e * period for e in range(e0, e1 + 1)]
 
 
+def parse_epoch(text):
+    """2.4.0 fit-in F4 (nit, 11 Nov): a typed or pasted epoch as a float, or None. A label before the number is
+    accepted and ignored ("JD 2461353.81255", "HJD=2461353.8", "BJD_TDB: 2461353.8", "E0 = …"), as are spaces and
+    a decimal comma. The Time of max/min window's HJD/BJD box says which system it is."""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    m = _re.fullmatch(r"(?:[A-Za-z_()]+(?:[0-9](?=\s*[:=]))?)?\s*[:=]?\s*([0-9][0-9 ]*(?:[.,][0-9]+)?)", t)
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(" ", "").replace(",", "."))
+    except ValueError:
+        return None
+    return v if math.isfinite(v) else None
+
+
 def o_minus_c(t_obs: float, period: float, epoch: float, half_cycles: bool = False) -> dict:
     """Cycle count E (nearest whole cycle, or half cycle for a secondary minimum), calculated time epoch + E x P and
     O-C in days and minutes. t_obs and epoch must be in the same time system (VSX epochs are HJD)."""
@@ -11474,14 +11606,9 @@ def _extremum_header(path: str) -> list[str]:
     return []
 
 
-def save_extremum_row(path: str, row: dict) -> str:
-    """Add one time of extremum to the CSV (created if missing). A row for the same star and type within 0.01 d is
-    replaced (a re-measurement). The first '# Created' line is kept and an '# Updated' line follows.
-    2.4.0 step 8 (regression, 23 Nov): every other '#' line (e.g. a '# Corrected …' note added by hand) is kept after
-    the '# Updated' line, and the rows already in the file keep their text in full: only the new row's text is
-    shortened (to 160 characters). Commas in text are still written as ';' (no quoting), so 2.3.x reads the file too.
-    Returns 'added' or 'replaced'."""
-    old = read_extremum_csv(path)
+def _write_extremum_rows(path: str, rows: list, capped_row=None) -> None:
+    """Write a times CSV: the first '# Created' line kept, an '# Updated' line, every other '#' line kept, the
+    columns SHOBS-P knows plus any the file already had. capped_row: the one new row whose text is shortened (160)."""
     created = None
     notes = []
     if os.path.exists(path):
@@ -11491,21 +11618,8 @@ def save_extremum_row(path: str, row: dict) -> str:
             created = heads[0]
             heads = heads[1:]
         notes = [h for h in heads if not h.startswith("# Updated")]
-
-    def key_t(r):
-        for k in ("hjd", "jd_utc"):
-            v = r.get(k)
-            if isinstance(v, float) and math.isfinite(v):
-                return v
-        return float("nan")
-
-    new_t = key_t(row)
-    kept = [r for r in old if not (same_star_text(r.get("star"), row.get("star")) and r.get("type") == row.get("type")
-                                   and abs(key_t(r) - new_t) < 0.01)]
     extra = [h for h in _extremum_header(path) if h and h not in EXTREMUM_COLUMNS]   # 2.2.14 review: keep them
     columns = list(EXTREMUM_COLUMNS) + extra
-    status = "replaced" if len(kept) < len(old) else "added"
-    rows = sorted(kept + [row], key=lambda r: (key_t(r) if math.isfinite(key_t(r)) else 0.0))
 
     def cell(k, v, cap=None):
         if isinstance(v, float):
@@ -11517,7 +11631,9 @@ def save_extremum_row(path: str, row: dict) -> str:
                 return f"{v:.5f}"
             if k in ("period_d", "noise_period_d", "noise_period_used_d"):
                 return f"{v:.8f}"
-            if k == "cycle":
+            if k in ("cycle", "n_points"):
+                # 2.4.0 fit-in F4 (nit, 15 and 17 Nov): a count stays a count. n_points was written "16" for the
+                # new row and "16.00" for every row read back from the file.
                 return f"{v:g}"
             return f"{v:.2f}"
         if isinstance(v, int):
@@ -11533,9 +11649,70 @@ def save_extremum_row(path: str, row: dict) -> str:
             fh.write(ln + "\n")
         fh.write(",".join(columns) + "\n")
         for r in rows:
-            cap = 160 if r is row else None   # step 8 regression: rows already saved keep their text in full
+            cap = 160 if r is capped_row else None   # step 8 regression: rows already saved keep their text in full
             fh.write(",".join(cell(k, r.get(k, ""), cap) for k in columns) + "\n")
+
+
+def _extremum_key_t(r: dict) -> float:
+    for k in ("hjd", "jd_utc"):
+        v = r.get(k)
+        if isinstance(v, float) and math.isfinite(v):
+            return v
+    return float("nan")
+
+
+def save_extremum_row(path: str, row: dict) -> str:
+    """Add one time of extremum to the CSV (created if missing). A row for the same star and type within 0.01 d is
+    replaced (a re-measurement). The first '# Created' line is kept and an '# Updated' line follows.
+    2.4.0 step 8 (regression, 23 Nov): every other '#' line (e.g. a '# Corrected …' note added by hand) is kept after
+    the '# Updated' line, and the rows already in the file keep their text in full: only the new row's text is
+    shortened (to 160 characters). Commas in text are still written as ';' (no quoting), so 2.3.x reads the file too.
+    Returns 'added' or 'replaced'."""
+    old = read_extremum_csv(path)
+    key_t = _extremum_key_t
+    new_t = key_t(row)
+    kept = [r for r in old if not (same_star_text(r.get("star"), row.get("star")) and r.get("type") == row.get("type")
+                                   and abs(key_t(r) - new_t) < 0.01)]
+    status = "replaced" if len(kept) < len(old) else "added"
+    rows = sorted(kept + [row], key=lambda r: (key_t(r) if math.isfinite(key_t(r)) else 0.0))
+    _write_extremum_rows(path, rows, capped_row=row)
     return status
+
+
+def rewrite_extremum_oc(path: str, star: str, period: float, epoch: float, system: str = "HJD",
+                        source: str = "typed") -> dict:
+    """2.4.0 fit-in F4 (nit, John 15 Nov): store the O−C of every saved time of `star` against one set of elements.
+    The list and the O−C diagram already recompute against the elements in the boxes (#65); this writes the same
+    numbers into the file (cycle, o_c_d, o_c_min, period_d, epoch, elements = '<source> <system>'), so the CSV read
+    in a spreadsheet agrees with the window. The file as it was is kept first, as NAME_before_oc_YYYYMMDD_HHMMSS.csv
+    beside it. Rows of other stars, the times, their errors and every other column are not touched.
+    Returns {"rows": rows rewritten, "backup": the copy's path}; raises ValueError when there is nothing to do."""
+    if not (period and epoch and math.isfinite(period) and math.isfinite(epoch) and period > 0):
+        raise ValueError("a period and an epoch are needed")
+    rows = read_extremum_csv(path)
+    mine = [r for r in rows if same_star_text(r.get("star"), star)]
+    if not mine:
+        raise ValueError(f"no saved times of {star} in {os.path.basename(path)}")
+    sysw = "BJD" if str(system).upper() == "BJD" else "HJD"
+    changed = 0
+    for r in mine:
+        t = r.get("bjd_tdb" if sysw == "BJD" else "hjd")
+        if not (isinstance(t, float) and math.isfinite(t)):
+            t = r.get("jd_utc")
+        if not (isinstance(t, float) and math.isfinite(t)):
+            continue
+        oc = o_minus_c(t, period, epoch, half_cycles=str(r.get("type") or "") == "min")
+        r.update(cycle=float(oc["cycle"]), o_c_d=float(oc["oc_d"]), o_c_min=float(oc["oc_min"]),
+                 period_d=float(period), epoch=float(epoch), elements=f"{source} {sysw}")
+        changed += 1
+    if not changed:
+        raise ValueError("none of the saved times has a time to work with")
+    import shutil
+    base, ext = os.path.splitext(path)
+    backup = f"{base}_before_oc_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext or '.csv'}"
+    shutil.copy2(path, backup)
+    _write_extremum_rows(path, rows)
+    return {"rows": changed, "backup": backup}
 
 
 # ---- Comparison ensemble health -------------------------------------------------------
