@@ -345,14 +345,16 @@ class TestInApp(unittest.TestCase):
         for errors, counts, want, not_want in (
                 ({"Gaia DR3": "HTTP 503"}, {"APASS DR9": 0, "Tycho-2": 2}, "Gaia DR3 (HTTP 503)", "Check that the Target"),
                 ({}, {"Gaia DR3": 800, "APASS DR9": 60, "Tycho-2": 9}, "Check that the Target", "outage")):
-            self.boxes["showinfo"].reset_mock()
+            self.boxes["showerror"].reset_mock()   # 2.4.0 fit-in F4 (m308): an error box, cause first
             app._chart_diag = {"auto": False, "catalog_errors": errors, "catalogs": counts, "sources": 80,
                                "scale": 1.25, "camera_bin": 1, "target": (100.0, 110.0)}
             stars = [{"bright": 10.0 + k} for k in range(3)]
             app._label_done("Gaia DR3", "", stars, stars, {"hits": 0}, [], "V", None)
-            msg = self.boxes["showinfo"].call_args[0][1]
+            msg = self.boxes["showerror"].call_args[0][1]
             self.assertIn(want, msg)
             self.assertNotIn(not_want, msg)
+            self.assertTrue(msg.startswith("Not solved: "), msg)
+            self.assertLess(msg.index(want), msg.index("The numbers:"))
 
     # ---- item 4: one night too short for any searched period ---------------------------------------------------
     def test_short_night_period_box(self):
