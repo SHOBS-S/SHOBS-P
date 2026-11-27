@@ -82,7 +82,7 @@ class TestDetrendChoices(unittest.TestCase):
         self.assertTrue(r["flip_test"]["kept"])
         self.assertEqual(r["flip_test"]["detrend"], ch["label"])
         self.assertIsNotNone(r["t_flip"])
-        self.assertIn("flip step kept with", tc.detrend_choice_text(ch))
+        self.assertIn("flip step kept (it lowers the BIC by", tc.detrend_choice_text(ch))   # cleanup H
         # forced step (flip_step=True): every choice carries it
         r2 = tc.lsq_fit(t, f, e, am, PLANET, after_flip=after, detrend_auto=True, flip_step=True)
         self.assertTrue(all(row["kept"] for row in r2["detrend_choice"]["rows"]))

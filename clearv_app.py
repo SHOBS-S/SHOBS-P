@@ -1800,6 +1800,21 @@ def usable_screen(sw: int, sh: int, platform: str) -> tuple:
     return 0, 0, sw, sh
 
 
+def scan_moves_words(result: dict) -> str:
+    """2.4.0 cleanup (F4 card 3, F): what a field scan lined each light curve up across, in words ("1 meridian flip
+    or rotator move and 1 re-center"), counted as the Log counts them (a re-center that came back is still one)."""
+    n_rc = int(result.get("recenters") or 0)
+    n_fl = result.get("n_flips")
+    if n_fl is None:   # (a result from before the count had its own key)
+        n_fl = max(int(result.get("segments", 1) or 1) - 1 - n_rc, 0)
+    parts = []
+    if n_fl:
+        parts.append(f"{n_fl} meridian flip{'s' if n_fl != 1 else ''} or rotator move{'s' if n_fl != 1 else ''}")
+    if n_rc:
+        parts.append(f"{n_rc} re-center{'s' if n_rc != 1 else ''}")
+    return " and ".join(parts) or "the night's segments"
+
+
 def main_window_geometry(sw: int, sh: int, platform: str) -> tuple:
     """2.3.2 (item 13): (width, height, x, y, min_width, min_height) for the main window: about 80 % of the screen,
     centered, never beyond the usable area; the minimum size never more than the opening size."""
@@ -3218,13 +3233,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return "warn"
         return "note"
 
-    def log(self, text: str, keep_status: bool = False, level: str | None = None, finding: bool = True):
+    TARGET_CHECK = "Target check"   # 2.4.0 cleanup (K+): the step of the "target isn't in these frames" findings
+
+    def log(self, text: str, keep_status: bool = False, level: str | None = None, finding: bool = True,
+            step: str | None = None):
         """Main thread only. Worker threads use self.call_ui(self.log, text). keep_status: the Log only, the status
         line keeps what it says (2.2.21 nit b: a report's "Saved … upload to …" line and its upload button).
         2.3.6 (#79 item 1): level note / warn / error (from the line's ⚠ / ✖ when not given). While a job runs the
         status line keeps the job's worst line, so a later plain note never hides a ⚠; _end_job sums them up.
         2.4.0 (#102): a ⚠ / ✖ also goes to the Findings panel (finding=False for a line that only sums others up),
-        and the log file tags it [WARN] / [ERROR] so a run can be grepped afterwards."""
+        and the log file tags it [WARN] / [ERROR] so a run can be grepped afterwards. 2.4.0 cleanup (K+): step names
+        the finding's step outside a job (TARGET_CHECK), so a new target can take its findings away."""
         level = level or self._msg_level(text)
         # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
         log_to_file(text if level == "note" or not finding else f"[{level.upper()}] {text}")
@@ -3249,8 +3268,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             store = getattr(self, "findings", None)
             if store is not None:
                 in_job = job is not None
-                store.add(level, first, step=getattr(self, "_job_step", "") if in_job else "",
-                          where=getattr(self, "_job_where", "") if in_job else "")
+                store.add(level, first, step=step if step is not None else
+                          (getattr(self, "_job_step", "") if in_job else ""),
+                          where=getattr(self, "_job_where", "") if in_job else (step or ""))
         if keep_status:
             return
         if job is not None and level == "note" and any(lv in ("warn", "error") for lv, _t in job):
@@ -5639,7 +5659,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         star_entry.pack(side=LEFT, fill=X, expand=True)
         # 2.2.5: the target is looked up by itself when you press Enter or leave the box with a new name.
         star_entry.bind("<Return>", lambda _e: self._auto_lookup())
-        star_entry.bind("<FocusOut>", lambda _e: self._auto_lookup())
+        # 2.4.0 cleanup (F4 card 5, K): only when the user left the box for another part of the window (a half-typed
+        # "HIP 114" was looked up when focus went away by itself: another program, a file dialog, the busy lock)
+        star_entry.bind("<FocusOut>", lambda _e: self._focus_left(star_entry, self._auto_lookup))
         # 2.4.0 fit-in F2 (#79 item 6, m074): the Star ID box is locked while a job runs (a star change then is not
         # applied); (m096) Look up again is greyed until a Star ID is typed.
         self.star_entry = self.gate(star_entry, None, busy=True)
@@ -5705,8 +5727,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         planet_entry.pack(side=LEFT, fill=X, expand=True)
         # 2.2.14 (item 2): like the Star ID, the planet is looked up by itself on Enter or on leaving the box when
         # the name changed since the last lookup; the button repeats the lookup.
-        for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
+        for seq in ("<Return>", "<KP_Enter>"):
             planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
+        planet_entry.bind("<FocusOut>", lambda _e: self._focus_left(planet_entry, self._auto_planet_lookup))   # K
         # 2.4.0 fit-in F2 (#79 item 6, m075): locked while a job runs, like the Star ID box; (m062) Look up again
         # is greyed until a planet name is typed (the examples are in its tooltip).
         self.gate(planet_entry, None, busy=True)
@@ -7599,6 +7622,36 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.field_centre_needed = needed
             self._layout_input_for_mode()
 
+    def _drop_target_findings(self):
+        """2.4.0 cleanup (F4 card 5, K+): findings about the last target not being in the frames (TARGET_CHECK) belong
+        to no job that runs again, so nothing replaced them: a new target (Star ID lookup, Load series) takes them
+        away. The Log keeps the lines."""
+        store = getattr(self, "findings", None)
+        if store is not None:
+            store.drop_step(self.TARGET_CHECK)
+
+    def _focus_left(self, entry, then):
+        """2.4.0 cleanup (F4 card 5, K): a box's FocusOut runs `then` only when the user moved to another widget of
+        this window. Focus that went to another program or a native dialog (focus_get() None), came straight back,
+        or left because the box was greyed by the busy lock is not "done typing": nothing is looked up then (Enter,
+        or leaving the box later, still does)."""
+        def check():
+            try:
+                now = self.focus_get()
+            except Exception:
+                now = None
+            try:
+                greyed = entry.instate(["disabled"])
+            except Exception:
+                greyed = False
+            if now is None or now is entry or greyed:
+                return
+            then()
+        try:
+            self.after(60, check)
+        except Exception:
+            pass
+
     def _auto_lookup(self):
         """2.2.5: look the target up when its name has changed since the last lookup (not on every keystroke)."""
         name = self.star_id.get().strip()
@@ -7611,6 +7664,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not name:
             return   # 2.4.0 fit-in F2 (m096): Look up again is greyed with no Star ID; a silent backstop
         self._last_lookup_name = name
+        self._drop_target_findings()   # 2.4.0 cleanup (K+): the last target's "not in these frames" findings go
         self._lookup_busy_start("star", name, "SIMBAD and VSX")   # 2.2.19 (nit); 2.2.20 (item 3): the busy bar
 
         def work():
@@ -11781,7 +11835,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"⚠ The frame's header says the telescope pointed at {core.radec_colons(point[0], point[1])}"
                      + (f" (OBJECT {obj})" if obj else "") + f", {core.angle_words(sep)} from {name} "
                      f"({core.radec_colons(ra, dec)}) on the Input page. Check the target on the Input page, or the "
-                     "telescope's target coordinates.")
+                     "telescope's target coordinates.", step=self.TARGET_CHECK)   # cleanup K+
         except Exception:
             pass
 
@@ -11828,9 +11882,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             off = core.target_vs_frame(ra, dec, (h, w), self.chart_solution)
             self._target_off_words = ""
             if off is not None and off["case"] == "far":
+                if why == "lookup":
+                    # 2.4.0 cleanup (F4 card 5, K+): a Star ID typed (or looked up) while the image is of another
+                    # field is not a problem with the frames: a plain line; the frames are checked when this target's
+                    # own lights are solved
+                    self.log(f"{name} is not on the image now on the Photometry page (it is centered "
+                             f"{core.angle_words(off['sep_deg'])} away): the target is looked for when its own lights "
+                             "are solved.", keep_status=True)
+                    return False
                 later = self._later_frames_point_near(ra, dec, off["field_deg"])
                 if later is False:
-                    self.log(self._far_from_target_text(off, name, ra, dec))
+                    self.log(self._far_from_target_text(off, name, ra, dec), step=self.TARGET_CHECK)
                     return False
                 # review: a later frame points at the target (True), or the other frames' headers carry no
                 # pointing (None): look at the next frames as 2.3.6 did, and say how far off this one is
@@ -11843,7 +11905,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if self._start_target_search(ra, dec, name, where, xy, edge):
                 return False
             # 2.4.0 fit-in F3 (m202 / m296): one sentence for the fact, without "click the target by hand"
-            self.log(self._target_off_frames_text(name))
+            self.log(self._target_off_frames_text(name), step=self.TARGET_CHECK)
             return False
         if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
             # 2.4.0 fit-in F4 (m203): with what to do; log() puts it on the status line
@@ -14925,7 +14987,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._update_pick_label()
         self.refresh_preview()
         self.update_star_panel()
-        if filled:
+        if filled and mode != "target":
+            # 2.4.0 cleanup (F4 card 5, D): a comp or check clicked is logged too (after a right-click clear the Log
+            # showed only the earlier miss, "not in the downloaded catalogs", and never the new star)
+            self._slot_say(mode, ("✓ " if "=" in filled else "") + filled + snap_note, bad="=" not in filled)
+        elif filled:
             self.status.set(filled + snap_note)
         elif snap_note:
             self.status.set(snap_note.strip())
@@ -14939,7 +15005,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if self._say_watch_clash(mode):   # 2.4.0 step 4 (S033): a comp is never a Watch star too
                 return
             if spare is None:
-                self._settle_slot_name(mode)   # 2.4.0 step 4 (#72): a stable name
+                settled = self._settle_slot_name(mode)   # 2.4.0 step 4 (#72): a stable name
+                if settled and (getattr(self, "_slot_notes", {}) or {}).get(mode):   # (cleanup D: its line follows)
+                    self._slot_notes[mode] = (settled,) + tuple(self._slot_notes[mode][1:])
                 self.update_star_panel()
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
@@ -16817,6 +16885,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _locate_watch_stars(self):
         """After Solve: find each watch star on the new frame by catalog name, then by sky position."""
+        if self.watch_list and (getattr(self, "_preview_foreign", "")
+                                or (self.series_path and self._series_off_this_image())):
+            # 2.4.0 cleanup (F4 card 5, I): after Load series the image is still the last field's: the series' watch
+            # stars are not looked for there ("0 of 2 found ... click the missing ones"), as its comps are not
+            self.log("Watch stars: placed after Calibrate on this series' lights (the image on the Photometry page "
+                     "is another field).")
+            self._refresh_watch_box()
+            return
         found = 0
         for w in self.watch_list:
             hit = None
@@ -17352,7 +17428,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if not (np.isfinite(px_) and np.isfinite(py_) and -50 <= px_ <= w_saved + 50 and -50 <= py_ <= h_saved + 50):
                 self._target_off_words = ""   # this solve's finding: where it lies is not worked out here
                 self.log(self._target_off_frames_text(
-                    extra="the chart is placed from the plate solution alone"))
+                    extra="the chart is placed from the plate solution alone"), step=self.TARGET_CHECK)
                 field_solve = True
         # The reference point the chart solution is built around: the target when one is marked (its marker is the
         # anchor), else the catalog query's center.
@@ -20002,6 +20078,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"Field scan: the {cap}-star limit was reached, so only the brightest {cap} stars are measured"
                      + (" (raise \"Most stars to measure\" to go fainter)." if discovery else "."), keep_status=True)
         found = [(x, y) for x, y in found_all if edge <= x < w - edge and edge <= y < h - edge]
+        # 2.4.0 cleanup (F4 card 3, G): why each detected star was not measured, for the Known variables window
+        left_out = [(float(x), float(y), "edge") for x, y in found_all if not (edge <= x < w - edge and edge <= y < h - edge)]
+        cap_reached = len(found_all) >= cap
         crowded = 0
         crowd_test = None
         if discovery and found:
@@ -20018,6 +20097,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 leak = crowd_test(found)
                 keep = [p for p, c in zip(found, leak) if not c >= core.LEAK_CROWDED]
                 crowded = len(found) - len(keep)
+                left_out += [(float(p[0]), float(p[1]), "crowded") for p, c in zip(found, leak) if c >= core.LEAK_CROWDED]
                 found = keep
             except Exception as exc:
                 self._scan_no_crowding(limits, exc)
@@ -20028,6 +20108,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             for x, y in found:
                 if any(math.hypot(x - ex, y - ey) <= max(radius, 4.0) for ex, ey in self.scan_excluded):
                     excluded += 1
+                    left_out.append((float(x), float(y), "excluded"))
                 else:
                     keep.append((x, y))
             found = keep
@@ -20315,6 +20396,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     if not found["checked"]:
                         recenter_note = self.NO_SCALE_NOTE
                     recenters = found["recenters"]
+                    if found.get("short"):   # 2.4.0 cleanup (E): a move that held under 5 frames, said plainly
+                        self.call_ui(self.log, "  " + core.short_move_text(
+                            found["short"], frame_no=lambda k: core.frame_label(frame_recs[k]["path"])))
                     if recenters:
                         ids, both = {}, np.zeros(len(seg), dtype=int)
                         for k, key in enumerate(zip(seg.tolist(), found["labels"])):
@@ -20445,8 +20529,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 result["segments"] = n_segments
                 result["recenters"] = len(recenters)   # 2.4.0 step 8 (#66)
                 result["recenter_note"] = recenter_note   # review M1 / S3: shown in the scan's header
-                # re-review N2: the header counts what the Log counts (a re-center that came back is still one)
-                result["boundaries"] = int(n_fl) + len(recenters)
+                # re-review N2: the header counts what the Log counts (a re-center that came back is still one).
+                # 2.4.0 cleanup (F4 card 3, F): its own keys; "boundaries" is the frame list set below (the header
+                # printed that list, "[(63, 'recenter')]", on a re-center night)
+                result["n_flips"] = int(n_fl)
                 near = [i for i in range(len(labels))
                         if i not in cand and i not in saturated and i not in too_faint and stats["usable"][i]
                         and math.isfinite(stats["excess"][i])]
@@ -20544,10 +20630,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                          + (f" ({sources.vsx_error})" if getattr(sources, "vsx_error", "") else "")
                                          + "; only SIMBAD was checked. Scan again later before reporting a "
                                            "candidate.")   # 2.4.0 fit-in F4 (sheet sweep, m367)
+                        tol = max(8.0, 3.0 * solution["scale"])
+                        # 2.4.0 cleanup (F4 card 3, G): one entry per star: VSX and SIMBAD (or two VSX names) for the
+                        # same position are merged, so the star is listed (and counted) once
+                        known = core.merge_known_variables(known, tol)
                         result["known"] = [k for k in known
                                            if 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[0] < w
                                            and 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[1] < h]
-                        tol = max(8.0, 3.0 * solution["scale"])
+                        for k in result["known"]:   # G: where it sits, and why a star there was not measured
+                            kx, ky = core.sky_to_pixel(k["ra"], k["dec"], solution)
+                            k["why_not"] = core.known_not_measured_why(
+                                (kx, ky), left_out, (h, w), edge, max(tol / solution["scale"], 3.0), cap_reached, cap)
                         matches = []
                         for ra, dec in result["radec"]:
                             best = None
@@ -21912,9 +22005,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 o.jump = 0
             self._run_note(self.NO_SCALE_NOTE)
             return []
+        short = []
         try:
             found = core.mark_recenters(night_points, [getattr(o, "_stack_reg", None) for o in night_points],
-                                        scale, factor)
+                                        scale, factor, out_short=short)
         except Exception as exc:
             for o in night_points:
                 o.jump = 0
@@ -21935,6 +22029,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                      "flip, so the stars sit on other pixels from there on. The frames after it are a new segment, "
                      "like the frames after a flip: the night table shows the step there (Flip/re-center step), and "
                      "'Line up segments' or 'Line up flip/re-center only (keep nights)' takes it out.")
+        if short:
+            # 2.4.0 cleanup (F4 card 2, E): a real move that held under 5 frames (GSC 03308-00462 13 Nov, frames
+            # 95-97, 64") is no segment of its own, and was not said anywhere: one plain line, on the page and in the Log
+            labels = {}
+            for m in short:
+                for k, o in zip(m["frames"], m["points"]):
+                    labels[k] = core.frame_label(o.path) or os.path.basename(o.path)
+            line = core.short_move_text(short, frame_no=lambda k: labels.get(k, k + 1))
+            self.log(line)
+            self._run_note(line)
         return found
 
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
@@ -22232,11 +22336,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             why = self._flip_step_suspect(night_points, night)
             if why and why.get("text"):
                 step = why["step"]
+                # 2.4.0 cleanup (step 8 N6): a re-center step is held the same way as a flip step
+                rc = why.get("kind") == core.STEP_RECENTER
+                what, at = ("re-center step", "re-center") if rc else ("meridian-flip step", "flip")
                 save_now = ask_no(
-                    APP_TITLE, f"This night's meridian-flip step is {step:+.3f} mag ⚠ (the frames after the flip "
+                    APP_TITLE, f"This night's {what} is {step:+.3f} mag ⚠ (the frames after the {at} "
                                f"read {abs(step):.3f} mag {'fainter' if step > 0 else 'brighter'} than those before), "
                                f"and {why['text']}.\n\n"
-                               "That is usually an aperture problem at the flip, not the star (see the Log).\n\n"
+                               f"That is usually an aperture problem at the {at}, not the star (see the Log).\n\n"
                                f"Save {os.path.basename(self.series_path)} with this night now?\n"
                                "Yes saves it. No keeps the night on screen but leaves the file on disk as it was "
                                "(Save series keeps it later; Remove night… takes it out).")
@@ -22250,12 +22357,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         rec["stamp"] = self._hold_stamp()
                         rec["logged"] = False
                         holds[night] = rec
-                    self.log(f"Not auto-saved: the night's flip step is {step:+.3f} mag. "
+                    self.log(f"Not auto-saved: the night's {'re-center' if rc else 'flip'} step is {step:+.3f} mag. "
                              f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
                     self.update_series_status()
             elif why is not None and why.get("step") is not None:
-                self.log(f"Flip step {why['step']:+.3f} mag on this night; the check star and the comps show no "
-                         "aperture problem at the flip, so the series was saved as usual.")
+                at = "re-center" if why.get("kind") == core.STEP_RECENTER else "flip"
+                self.log(f"{at.capitalize()} step {why['step']:+.3f} mag on this night; the check star and the comps "
+                         f"show no aperture problem at the {at}, so the series was saved as usual.")
         if save_now:
             # 2.3.5 (review r2 S2): a held night run again and saved (Yes, or no flip step this time) is no longer held.
             if self._series_holds().pop(night, None) is not None:
@@ -22276,34 +22384,43 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         when it has one that looks like the star (no reason to stop the save); {"step", "text"} with the reason when
         it looks like an aperture problem: the check star's step is also over the mark and at least half the
         target's, or the run saw comp and check jump together at the flip (_run_star_notes), or (no check star) the
-        step is over 5 x the night's point-to-point scatter."""
+        step is over 5 x the night's point-to-point scatter.
+        2.4.0 cleanup (step 8 N6, John 27 Nov): a re-center step (a pointing jump without a flip, #66) is held the
+        same way: the flip step is looked at first, then the largest re-center step over the mark; the result says
+        which ("kind": "flip" or "re-center")."""
         try:
             use = [not o.flag for o in night_points]
-            steps = core.flip_offsets(night_points, [o.mag for o in night_points], use=use)
-            step = (steps.get(night) or {}).get("offset")
+            steps = core.night_steps(night_points, [o.mag for o in night_points], use=use).get(night) or []
         except Exception:
             return None
-        if step is None or not math.isfinite(step) or abs(step) <= core.FLIP_STEP_MARK:
+        big = [st for st in steps if st.get("offset") is not None and math.isfinite(st["offset"])
+               and abs(st["offset"]) > core.FLIP_STEP_MARK]
+        if not big:
             return None
-        if getattr(self, "_last_flip_signature", False):
-            return {"step": step, "text": "the comp and check apertures jumped together at the flip"}
+        flips = [st for st in big if st["kind"] == core.STEP_FLIP]
+        st = flips[0] if flips else max(big, key=lambda x: abs(x["offset"]))
+        step, kind = st["offset"], st["kind"]
+        if kind == core.STEP_FLIP and getattr(self, "_last_flip_signature", False):
+            return {"step": step, "kind": kind, "text": "the comp and check apertures jumped together at the flip"}
         kvals = [o.check_std if o.check_std is not None else float("nan") for o in night_points]
         if any(math.isfinite(v) for v in kvals):
             try:
-                kstep = (core.flip_offsets(night_points, kvals, use=use).get(night) or {}).get("offset")
+                ksteps = core.night_steps(night_points, kvals, use=use).get(night) or []
+                kstep = next((k["offset"] for k in ksteps if k["part"] == st["part"]), None)
             except Exception:
                 kstep = None
             if kstep is not None and math.isfinite(kstep) and abs(kstep) > core.FLIP_STEP_MARK \
                     and abs(kstep) >= 0.5 * abs(step):
-                return {"step": step, "text": f"the check star steps too ({kstep:+.3f} mag)"}
-            return {"step": step, "text": ""}
+                return {"step": step, "kind": kind, "text": f"the check star steps too ({kstep:+.3f} mag)"}
+            return {"step": step, "kind": kind, "text": ""}
         mags = np.array([o.mag for o, u in zip(night_points, use) if u and math.isfinite(o.mag)])
         if mags.size >= 6:
             p2p = 1.4826 * float(np.median(np.abs(np.diff(mags)))) / math.sqrt(2.0)
             if p2p > 0 and abs(step) > 5.0 * p2p:
-                return {"step": step, "text": f"there is no check star, and the step is {abs(step) / p2p:.0f} × the "
-                                              "night's point-to-point scatter"}
-        return {"step": step, "text": ""}
+                return {"step": step, "kind": kind,
+                        "text": f"there is no check star, and the step is {abs(step) / p2p:.0f} × the night's "
+                                "point-to-point scatter"}
+        return {"step": step, "kind": kind, "text": ""}
 
     # ---- 2.2.15 (item 1): planet transits in a Variables campaign -------------------------------------------
     PLANET_RETRY_S = 600.0   # a failed lookup (offline, unknown star) is tried again after this long
@@ -24122,6 +24239,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.5: a series' target already has its RA/Dec; don't look it up again when the Star ID box loses focus.
         if meta.get("star_id") and meta.get("ra_hours"):
             self._last_lookup_name = str(meta["star_id"]).strip()
+        if meta.get("star_id"):
+            self._drop_target_findings()   # 2.4.0 cleanup (K+): the series' target replaces the last one
         # 2.2.5: the series says which comps 3-10 it uses; slots it does not name are emptied (a 2.2.4 or older
         # series has at most two comps).
         for r in COMP_ROLES[2:]:
@@ -24876,18 +24995,32 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"✖ Load series stopped: {type(exc).__name__}: {exc}. The series may be only partly loaded: "
                      "load it again.")
 
+        tries = {"n": 0}
+
         def read_done(got):
             self._series_lock(False)
+            # 2.4.0 cleanup (F4 review nit): the Star ID changed while the worker read (or looked up): read again
+            # with the new one, so the same-star lookup never runs on the window's thread (at most twice more)
+            if got[1] is None and tries["n"] < 2 and self._series_read_stale(got):
+                tries["n"] += 1
+                start_read()
+                return
             try:
                 self._load_series_file(path, step, got=got, sync=False, fail=fail)
             except Exception as exc:
                 fail(exc)
 
-        # merge F4 (m509 on the worker): what the same-star lookup needs from the window, read here on its thread
-        cur_id = self.star_id.get().strip()
-        cur_pos = (self.ra_hours.get(), self.dec_deg.get())
+        def start_read():
+            # merge F4 (m509 on the worker): what the same-star lookup needs from the window, read on its thread
+            cur_id = self.star_id.get().strip()
+            cur_pos = (self.ra_hours.get(), self.dec_deg.get())
+            self._series_lock(True)
+            try:
+                threading.Thread(target=read, args=(cur_id, cur_pos), daemon=True).start()
+            except Exception as exc:
+                fail(exc)
 
-        def read():
+        def read(cur_id, cur_pos):
             try:
                 got = (core.load_series(path), None)
             except Exception as exc:
@@ -24903,12 +25036,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     except Exception:
                         same = None
                     got = (got[0], None, {"same": same, "cur": cur_id})
+            if len(got) == 2:
+                got = (got[0], got[1], {"same": None, "cur": cur_id, "none": True})   # (no lookup was needed)
             self.call_ui(read_done, got)
-        self._series_lock(True)
-        try:
-            threading.Thread(target=read, daemon=True).start()
-        except Exception as exc:
-            fail(exc)
+        start_read()
+
+    def _series_read_stale(self, got) -> bool:
+        """2.4.0 cleanup: True when Load series' worker read the file for another Star ID than the Input page's
+        now, and the names differ, so _load_series_file would need the same-star lookup (a network call)."""
+        pre = got[2] if len(got) > 2 else None
+        if pre is None:
+            return False
+        cur = self.star_id.get().strip()
+        if pre.get("cur") == cur:
+            return False
+        meta = got[0][0] if isinstance(got[0], tuple) and got[0] else {}
+        new_id = str((meta or {}).get("star_id") or "").strip()
+        return bool(cur and new_id and name_key(new_id) != name_key(cur))
 
     SERIES_SYNC = False   # tests set True: Load series runs in line (the threaded path has its own test)
 
@@ -24967,6 +25111,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             pre = got[2] if got is not None and len(got) > 2 else None
             if pre is not None and pre.get("cur") == self.star_id.get().strip():
                 same = pre.get("same")   # merge F4: looked up on the read worker, off the window's thread
+            elif not sync:
+                # 2.4.0 cleanup: never a network call on the window's thread; a Star ID still changing after two
+                # re-reads gets the question (as a failed lookup does)
+                same = None
             else:
                 step("where the two names point (SIMBAD / VSX)")
                 same = self._same_star_by_lookup(self.star_id.get().strip(), meta)
@@ -27305,16 +27453,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         same = self._same_backup(path)
         if same:
             # review S2: this original is already kept (an earlier Load converted it): no second copy
-            self.log(f"Series updated to the new star format; the original is already kept as "
-                     f"{os.path.basename(same)}.")
+            # 2.4.0 cleanup (F4 card 5, J): the file on disk is not changed by a Load (the conversion is in memory
+            # until the series is saved), so the line says when it happens, not that it did
+            self.log(f"{os.path.basename(path)} is in the older star format: it is converted to the new one when the "
+                     f"series is next saved (the original is already kept as {os.path.basename(same)}).")
             return same
         try:
             kept = star_record.write_backup(path)
         except OSError as exc:
-            self.log(f"Series updated to the new star format in memory; a backup of the original could not be written "
-                     f"({exc}), so the first save keeps it as {os.path.basename(series_prev_path(path))} instead.")
+            self.log(f"{os.path.basename(path)} is in the older star format: it is converted to the new one when the "
+                     f"series is next saved; a backup of the original could not be written ({exc}), so that save "
+                     f"keeps it as {os.path.basename(series_prev_path(path))} instead.")
             return ""
-        self.log(f"Series updated to the new star format; the original is kept as {os.path.basename(kept)}.")
+        self.log(f"{os.path.basename(path)} is in the older star format: it is converted to the new one when the "
+                 f"series is next saved (the original is kept as {os.path.basename(kept)}).")
         return kept
 
     @staticmethod
@@ -32084,6 +32236,19 @@ class KnownVariablesWindow:
         top.pack(fill=BOTH, expand=True)
         ttk.Label(top, text="Known variables in the field", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         known = r.get("known")
+        pairs = [(k, k) for k in known] if known is not None else None   # (shown, the entry the scan matched)
+        if known is not None and not any(k.get("members") for k in known):
+            # 2.4.0 cleanup (G): a scan saved before the merge: one row per star here too, shown under every name,
+            # found by the entry the scan matched (the saved result is not changed)
+            matched = {id(m) for m in (r.get("vsx") or []) if m is not None}
+            pairs = []
+            for g in core.merge_known_variables(known, 8.0):
+                mem = g.get("members") or [g]
+                orig = [k for k in known if any(k.get("name") == m.get("name") and k.get("ra") == m.get("ra")
+                                                for m in mem)]
+                hit = next((k for k in orig if id(k) in matched), orig[0] if orig else g)
+                pairs.append((g, hit))
+            known = [g for g, _hit in pairs]
         if known is None:
             why = ("VSX and SIMBAD could not be reached during the scan. Scan again when online."
                    if r.get("radec") is not None else
@@ -32120,10 +32285,13 @@ class KnownVariablesWindow:
         matches = r.get("vsx") or []
         cand = set(r.get("candidates") or [])
         entries = []
-        for k in known:
-            idx = next((i for i, m in enumerate(matches) if m is k), None)
+        for k, k_match in pairs:
+            idx = next((i for i, m in enumerate(matches) if m is k_match), None)
             if idx is None:
-                entries.append((1, k, None, ("", "", "", "", "not measured (faint, saturated, blended, or not detected)")))
+                # 2.4.0 cleanup (F4 card 3, G): the real reason (edge, crowded, excluded, beyond the star limit, not
+                # detected); a scan saved before the reasons were kept says what it can
+                entries.append((1, k, None, ("", "", "", "", k.get("why_not")
+                                             or "not measured (faint, saturated, blended, or not detected)")))
                 continue
             sc, ex = r["scatter"][idx], r["excess"][idx]
             if idx in set(r.get("saturated") or []):
@@ -32141,7 +32309,8 @@ class KnownVariablesWindow:
                              f"{ex:.1f}" if math.isfinite(ex) else "", seen)))
         entries.sort(key=lambda e: (e[0], -(r["excess"][e[2]] if e[2] is not None and math.isfinite(r["excess"][e[2]]) else 0)))
         for _order, k, idx, cells in entries:
-            kind = f"{k.get('type', '')} ({k.get('desc', '')})" if k.get("source") == "SIMBAD" else k.get("desc", "")
+            kind = k.get("merged_desc") or (f"{k.get('type', '')} ({k.get('desc', '')})" if k.get("source") == "SIMBAD"
+                                            else k.get("desc", ""))   # cleanup G: one row per star
             item = tree.insert("", END, values=(k["name"], k.get("source", ""), kind, *cells))
             self.rows[item] = idx
             self.known_rows[item] = k
@@ -32166,7 +32335,9 @@ class KnownVariablesWindow:
         if idx is None:
             k = self.known_rows.get(sel[0]) if sel else None
             if k:
-                self.view.app._add_watch_sky(k["name"], k["ra"], k["dec"], self.view.app._variable_hover(k).replace("\n", " "))
+                # 2.4.0 cleanup (G): a merged row watches the star under its first name (VSX's when it has one)
+                self.view.app._add_watch_sky(str(k["name"]).split(" / ")[0], k["ra"], k["dec"],
+                                             self.view.app._variable_hover(k).replace("\n", " "))
             return
         if not self._view_alive():
             return
@@ -32229,11 +32400,8 @@ class ScanView:
         self._cal_text = cal
         self.header_text = StringVar(value="")   # Fable S5: refreshed when a star is added by hand
         self._header_tail = (
-                 (f"Each star's light curve was lined up across {result.get('boundaries', result['segments'] - 1)} "
-                  "meridian flip(s), rotator move(s) or re-center(s) first. " if result.get("recenters") else
-                  # 2.4.0 step 8 (#66; re-review N2: counted as the Log counts them)
-                  f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
-                    "move(s) first. " if result.get("segments", 1) > 1 else "")
+                 (f"Each star's light curve was lined up across {scan_moves_words(result)} first. "
+                  if result.get("recenters") or result.get("segments", 1) > 1 else "")
                  + (result["recenter_note"] + " " if result.get("recenter_note") else "")   # review M1 / S3
                  + "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
                  "on the scatter plot to pick several stars, then Mark on image. A suspect is a lead, not a "

@@ -1242,8 +1242,20 @@ def detrend_choice_text(choice: dict, ascii_only: bool = False) -> str:
     others = [f"{r['label']} {d} {r['dbic']:+.1f}" for r in choice["rows"] if r["key"] != choice["key"]]
     flip = ""
     if any("kept" in r for r in choice["rows"]):
-        kept = [r["label"] for r in choice["rows"] if r.get("kept")]
-        flip = ("; flip step kept with " + (", ".join(kept) if kept else "none of them"))
+        # 2.4.0 cleanup (F4 card 4, H): "flip step kept with none" read as "kept with the detrend none" or "kept
+        # with no detrend": say the chosen detrend's own answer, with its ΔBIC, and which others kept one
+        mine = next((r for r in choice["rows"] if r["key"] == choice["key"]), {})
+        dbs = mine.get("dbic_step")
+        known = isinstance(dbs, float) and math.isfinite(dbs)
+        if mine.get("kept"):
+            flip = "; flip step kept" + (f" (it lowers the BIC by {dbs:.1f})" if known else "")
+        elif known and dbs > 0:
+            flip = f"; flip step not needed (it lowers the BIC by only {dbs:.1f}; {FLIP_STEP_DBIC:g} is needed)"
+        else:
+            flip = "; flip step not needed" + (" (it does not lower the BIC)" if known else "")
+        also = [r["label"] for r in choice["rows"] if r.get("kept") and r["key"] != choice["key"]]
+        if also and not mine.get("kept"):
+            flip += f" (it would be kept with {', '.join(also)})"
     simpler = any(r["dbic"] < 0 for r in choice["rows"])
     text = (f"Detrend {DETREND_AUTO_LABEL}: {choice['label']}"
             + (f" (fewer terms; any choice within {DETREND_TIE:g} of the lowest BIC counts as just as good)"

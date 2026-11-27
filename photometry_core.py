@@ -7194,12 +7194,13 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
     Returns {"labels": each frame's segment number (0 = the first pointing; the same number means the same pointing),
     "recenters": [{"index": the first frame of the run that moved, "from": the last frame of the pointing it left,
     "px", "arcsec", "dx", "dy" (stored pixels, from where the old segment ended), "returned": True when it rejoined an
-    earlier segment}], "checked": bool}."""
+    earlier segment}], "checked": bool, "short": [moves that did not hold (2.4.0 cleanup, F4 card 2 E):
+    {"index": first frame, "frames": [frames], "px", "arcsec" (from where the segment it sits beside ended)}]}."""
     n = len(regs)
     labels = [0] * n
     scale, factor = _recenter_scale(scale_arcsec, px_factor)
     if scale is None:
-        return {"labels": labels, "recenters": [], "checked": False}
+        return {"labels": labels, "recenters": [], "checked": False, "short": []}
     min_hold = max(int(min_hold), 1)
     xy = [_reg_xy(r) for r in regs]
     user = [sides[k] if sides is not None else None for k in range(n)]
@@ -7225,6 +7226,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
         prev = k
     segs: dict[tuple, list] = {}   # (side, number) -> the frames of its runs that held
     found = []
+    short = []   # 2.4.0 cleanup (E): a real move that held under min_hold frames (GSC 13 Nov frames 95-97, 64")
     done = [False] * n
     carry, cur, pending = 0, None, []
     loose = []   # 2.4.0 fit-in F4 (step 8 nit N1): short runs given the segment they left, until the next run that holds
@@ -7247,6 +7249,11 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
             else:
                 give(frames, cur)   # (a) an excursion stays with the segment it left
                 loose.append(frames)
+                was = middle(segs[(run_side, cur)][-min_hold:])
+                if far(start, was):
+                    d = math.hypot(start[0] - was[0], start[1] - was[1])
+                    short.append({"index": frames[0], "frames": list(frames), "px": d * factor, "arcsec": d * scale,
+                                  "side": run_side, "label": cur})
             continue
         best = None
         for (seg_side, label), seg_frames in segs.items():
@@ -7277,6 +7284,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
             for fr in loose:
                 if all(not far(xy[k], start) for k in fr) and all(far(xy[k], e) for k in fr for e in old):
                     give(fr, label)
+                    short[:] = [x for x in short if x["frames"] != fr]   # (it is this re-center's start, not a move)
                     if found:   # this run's own record (appended just above): the move starts at these frames
                         found[-1]["index"] = min(found[-1]["index"], fr[0])
         segs.setdefault((run_side, label), []).extend(frames)
@@ -7294,11 +7302,31 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
         if near is None:
             near = next((m for m in range(k + 1, n) if done[m] and xy[m] is not None and user[m] == user[k]), None)
         labels[k] = labels[near] if near is not None else 0
-    return {"labels": labels, "recenters": found, "checked": True}
+    short = [{k_: v for k_, v in x.items() if k_ not in ("side", "label")} for x in short]
+    return {"labels": labels, "recenters": found, "checked": True, "short": short}
+
+
+def short_move_text(moves: list, frame_no=None, min_hold: int = RECENTER_HOLD) -> str:
+    """2.4.0 cleanup (F4 card 2, E): one plain line for the pointing moves that held under min_hold frames (not a
+    re-center segment of their own; their frames stay with the pointing they sit beside). frame_no(k) turns a frame
+    index into the number shown to the user (default k + 1). '' when there is none."""
+    if not moves:
+        return ""
+    num = frame_no or (lambda k: k + 1)
+    parts = []
+    for m in moves:
+        fr = [num(k) for k in m["frames"]]
+        where = f"frame {fr[0]}" if len(fr) == 1 else f"frames {fr[0]}–{fr[-1]}"
+        parts.append(f"{where} ({m['arcsec']:.0f}″)")
+    n = len(moves)
+    return (f"The pointing moved at {', '.join(parts)} but held for fewer than {min_hold} frames, so "
+            + ("it is" if n == 1 else "they are") + " not a re-center segment of "
+            + ("its" if n == 1 else "their") + " own: those frames stay with the pointing before them, and a step "
+            "there is not lined up. A move that short is usually a bad alignment or the end of the night.")
 
 
 def mark_recenters(observations: list[Obs], regs: list, scale_arcsec: float | None = None,
-                   px_factor: float = 1.0) -> list[dict]:
+                   px_factor: float = 1.0, out_short: list | None = None) -> list[dict]:
     """Set each point's `jump` (the number of its re-center segment in the night, 0 = the first pointing) from the
     frames' registrations and return the re-centers found: recenter_segments' records plus "before" / "after" (the
     Obs on each side). observations: one night's measured points; regs: their registrations, in the same order. A
@@ -7311,7 +7339,10 @@ def mark_recenters(observations: list[Obs], regs: list, scale_arcsec: float | No
     res = recenter_segments([regs[k] for k in order], scale_arcsec, px_factor, sides=[o.segment or "" for o in pts])
     for o, label in zip(pts, res["labels"]):
         o.jump = int(label)
-    return [dict(j, before=pts[j["from"]], after=pts[j["index"]]) for j in res["recenters"]]
+    found = [dict(j, before=pts[j["from"]], after=pts[j["index"]]) for j in res["recenters"]]
+    if out_short is not None:   # 2.4.0 cleanup (E): the moves that did not hold, with their points
+        out_short.extend(dict(m, points=[pts[k] for k in m["frames"]]) for m in res.get("short") or [])
+    return found
 
 
 def frame_jump(reg, segment: str, others: list, scale_arcsec: float | None = None, px_factor: float = 1.0):
@@ -8381,6 +8412,74 @@ def field_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> tuple[l
         found.extend(rows)
         answered.append("SIMBAD")
     return found, answered
+
+
+def merge_known_variables(known: list[dict], tol_arcsec: float) -> list[dict]:
+    """2.4.0 cleanup (F4 card 3, G): one entry per star. Entries (VSX, SIMBAD, or two VSX names) within tol_arcsec of
+    each other are the same star: merged into the first (a VSX entry first), with every name ("name": "A / B"),
+    every source ("source": "VSX + SIMBAD"), the descriptions joined, and the originals in "members". A list that
+    was merged already is returned as it is (idempotent)."""
+    order = sorted(range(len(known)), key=lambda i: (known[i].get("source") != "VSX", i))
+    groups: list[list[dict]] = []
+    for i in order:
+        k = known[i]
+        try:
+            ra, dec = float(k["ra"]), float(k["dec"])
+        except (KeyError, TypeError, ValueError):
+            groups.append([k])
+            continue
+        for g in groups:
+            try:
+                if sky_separation_arcsec(ra, dec, float(g[0]["ra"]), float(g[0]["dec"])) <= tol_arcsec:
+                    g.append(k)
+                    break
+            except (KeyError, TypeError, ValueError):
+                continue
+        else:
+            groups.append([k])
+    out = []
+    for g in groups:
+        if len(g) == 1:
+            out.append(g[0])
+            continue
+        first = dict(g[0])
+        names = list(dict.fromkeys(str(m.get("name") or "") for m in g if m.get("name")))
+        sources = list(dict.fromkeys(str(m.get("source") or "") for m in g if m.get("source")))
+        descs = []
+        for m in g:
+            d = (f"{m.get('type', '')} ({m.get('desc', '')})" if m.get("source") == "SIMBAD" else m.get("desc", ""))
+            if d and d not in descs:
+                descs.append(d)
+        first.update(name=" / ".join(names), source=" + ".join(sources), merged_desc="; ".join(descs),
+                     members=[dict(m) for m in g])
+        if first.get("period") is None:
+            first["period"] = next((m.get("period") for m in g if m.get("period")), None)
+        out.append(first)
+    return out
+
+
+def known_not_measured_why(xy, left_out, shape, edge: float, tol_px: float, cap_reached: bool, cap: int) -> str:
+    """2.4.0 cleanup (F4 card 3, G): why a known variable in the frame has no scan star, in the words of the Known
+    variables window. xy: its pixel position; left_out: [(x, y, "edge" / "crowded" / "excluded")] for the detected
+    stars the scan did not measure; edge: the scan's edge margin (px); tol_px: how near a detected star must be."""
+    x, y = float(xy[0]), float(xy[1])
+    h, w = int(shape[0]), int(shape[1])
+    near = None
+    for lx, ly, why in left_out or ():
+        d = math.hypot(lx - x, ly - y)
+        if d <= tol_px and (near is None or d < near[0]):
+            near = (d, why)
+    if near is not None:
+        return {"edge": f"not measured: too near the frame edge (within {edge:.0f} px, where its sky ring is cut)",
+                "crowded": "not measured: left out as crowded (a neighbor's light reaches its aperture or sky ring; "
+                           "untick 'Leave out crowded stars' to measure it)",
+                "excluded": "not measured: left out by hand (Exclude)"}.get(near[1], "not measured")
+    if not (edge <= x < w - edge and edge <= y < h - edge):
+        return f"not measured: too near the frame edge (within {edge:.0f} px, where its sky ring is cut)"
+    if cap_reached:
+        return (f"not measured: fainter than the brightest {cap} stars the scan measured (raise Most stars to "
+                "measure), or not detected")
+    return "not measured: not detected on the reference frame (too faint, or merged with a brighter neighbor)"
 
 
 def flag_variables(stars: list[dict], variables: list[dict], tol_arcsec: float = 6.0) -> int:
@@ -13322,7 +13421,10 @@ def align_segments(inst: np.ndarray, seg: np.ndarray, min_frames: int = 5) -> np
     out = np.array(inst, dtype=float, copy=True)
     seg = np.asarray(seg)
     first = seg == seg.min()
-    with np.errstate(all="ignore"):
+    # 2.4.0 cleanup (F4 card 3, F): a star with no measurement in a segment is NaN there, quietly (np.errstate does
+    # not reach nanmedian's "All-NaN slice encountered" RuntimeWarning, which printed in the console)
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
         base = np.nanmedian(out[first], axis=0)
         for g in np.unique(seg):
             rows = seg == g
