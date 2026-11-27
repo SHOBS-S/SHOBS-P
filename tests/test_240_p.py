@@ -211,9 +211,10 @@ class TestSeriesShouldFixes(M.AppCase):
         self.load(self.path)
         self.load(self.path)
         self.assertFalse(os.path.exists(os.path.join(self.dir, "HD_219134_backup2.cvseries")))
-        said = self.said("new star format")
-        self.assertEqual(said, ["Series updated to the new star format; the original is already kept as "
-                                "HD_219134_backup.cvseries."])
+        said = self.said("older star format")
+        self.assertEqual(said, ["HD_219134.cvseries is in the older star format: it is converted to the new one when "
+                                "the series is next saved (the original is already kept as "
+                                "HD_219134_backup.cvseries)."])   # 2.4.0 cleanup (J)
         # another file under the same name is another original: it gets its own backup
         cat = {A: 8.728}
         core.save_series(self.path, _old_meta([A], cat), _points([A], cat, n=7))

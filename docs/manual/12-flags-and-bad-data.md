@@ -183,6 +183,9 @@ From 2.4.0 SHOBS-P finds this in each run. A re-center is a **new position of th
 
 - The field moves by **at least 20″ and at least 10 pixels** between one measured frame and the next, with no flip there. Both limits must be passed, so ordinary drift and small dithers split nothing. (The pixels are those of the stored frame.)
 - The field then **stays at the new position for at least 5 measured frames**. Those frames, and the ones after them, become a new segment, just like the frames after a flip. One frame that registers far off, or a few frames away and back, is not a re-center: those frames stay in the segment around them, and the numbers are the same as if nothing had moved. No re-center segment ever has fewer than 5 frames.
+  A move that held for fewer than 5 frames (at the end of the night, say) is not a segment of its own: from 2.4.0
+  one plain line says so, *The pointing moved at frames 95–97 (64″) but held for fewer than 5 frames …*, so you
+  know those frames sit on other pixels.
 - If the field later **comes back to where an earlier segment was** (within the same limits, on the same side of a flip), those frames rejoin that earlier segment. They do not start a new one. So a mount that moves away and back gives two segments, not three.
 
 The move at a meridian flip itself is the flip, not a re-center.
@@ -194,6 +197,9 @@ You see a re-center in three places:
 - The Log names the two frames and the size of the move: *Re-center: the pointing moved by 64″ (237 px) between 20 and 21 with no meridian flip …* When the field came back to an earlier position, the line ends *… back to where it was earlier in the night. The frames from there on rejoin that earlier segment.*
 - The light curve has a **dashed purple line** where it happened; the plot's title key says **┆ re-center**.
 - The **Flip/re-center step** column shows its step, for example `re-center +0.050 ⚠`. The ⚠ comes with a step over 0.02 mag, as for a flip.
+- With a series open, a night whose re-center step looks like an aperture problem (the check star steps too, or with
+  no check star a step far beyond the night's scatter) is **not saved into the series by itself**: SHOBS-P asks
+  first, exactly as for a flip step (chapter 9, "This night's meridian-flip step is …"; from 2.4.0).
 
 **Line up flip/re-center only (keep nights)** takes the step out and keeps the nights against each other; **Line up segments** lines the segment up with everything else. A step needs at least 5 used points on each side; with fewer it is not measured (the column shows **—**) and nothing is moved. This can happen when most of a segment's frames are flagged. The same holds for **Line up segments** and the **Check-star correction**: a re-center segment with fewer than 5 points to go by is not lined up by itself; it moves together with the segment before it. In the light-curve CSV the `segment` column of such a night reads, for example, `no flip / before re-center` and `no flip / after re-center` (`after re-center 2` after a second one). The words name the segment: frames that came back to the first position read `before re-center` again.
 

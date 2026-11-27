@@ -181,7 +181,10 @@ next one.
 Before measuring each star's scatter, SHOBS-P lines its light curve up across any meridian flip or rotator move,
 so a flip cannot pass for a variable star. From 2.4.0 it does the same across a re-center: the field moved by at
 least 20″ and 10 pixels between two frames with no flip, and stayed there for at least 5 frames (chapter 12; the
-same test as a photometry run). The Log says how many and how far. Without a plate scale (no solve, empty Optics
+same test as a photometry run). The Log says how many and how far, and the text above the scan's table says, for
+example, *Each star's light curve was lined up across 1 re-center first.* A move that held for fewer than 5 frames
+(the end of the night, or one bad alignment) is not a segment; the Log says so in one plain line (*The pointing
+moved at frames 95–97 (64″) but held for fewer than 5 frames …*). Without a plate scale (no solve, empty Optics
 boxes) re-centers are not looked for, and the text above the scan's table says so. On an alt-az mount there are no flips: the frames are aligned following
 the field rotation.
 
@@ -319,8 +322,12 @@ Tick **Suspects only** in the **View** box to hide everything else on the image.
 - **Known variables measured…** lists every VSX and SIMBAD variable in the frame and what the scan saw for each, in
   the column **In this scan**: **VARIED: a scan suspect**, **steady tonight, within the noise**, **somewhat more
   scatter than normal**, **measured on too few frames**, **saturated: clipped, so not usable tonight**, or **not
-  measured (faint, saturated, blended, or not detected)**. It is a quick way to see whether your setup catches the
-  variables you know are there.
+  measured: …** with the reason: *too near the frame edge*, *left out as crowded* (untick **Leave out crowded
+  stars** to measure it), *left out by hand (Exclude)*, *fainter than the brightest N stars the scan measured* (raise
+  **Most stars to measure**), or *not detected on the reference frame*. It is a quick way to see whether your setup
+  catches the variables you know are there. From 2.4.0 each star has **one row**: when VSX and SIMBAD (or two VSX
+  entries) list the same star, the row carries every name ("GSC 03308-00462 / ATO J041.8228+50.7518") and both
+  sources, and the count above the table counts it once.
 - **Hide known variables** removes known variables from the table, the plot and the marks on the image, so the new
   ones stand out. Their rank numbers are kept, so the table may jump from #1 to #3, matching the marks on the image.
   It also works when the field's variable-star check finishes after the scan.

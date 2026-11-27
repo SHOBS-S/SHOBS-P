@@ -8419,7 +8419,7 @@ def merge_known_variables(known: list[dict], tol_arcsec: float) -> list[dict]:
     each other are the same star: merged into the first (a VSX entry first), with every name ("name": "A / B"),
     every source ("source": "VSX + SIMBAD"), the descriptions joined, and the originals in "members". A list that
     was merged already is returned as it is (idempotent)."""
-    order = sorted(range(len(known)), key=lambda i: (known[i].get("source") != "VSX", i))
+    order = sorted(range(len(known)), key=lambda i: (not str(known[i].get("source") or "").startswith("VSX"), i))
     groups: list[list[dict]] = []
     for i in order:
         k = known[i]

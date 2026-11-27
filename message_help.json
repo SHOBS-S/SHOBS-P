@@ -93,6 +93,21 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "UI thread slow: N pauses of 1-3 s in the last minute or so (longest … s, … s in all); other threads during one: …"
+   ],
+   "todo": "Nothing. If it comes often, send the log file with your report."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Fit helper process could not start (…); fits run in the window's process (the window may be slow while one runs).",
+    "… could not take the fit …"
+   ],
+   "todo": "Nothing; the results are the same either way. If the window freezes during fits, send the log file."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Earth orientation table (IERS-A): … loaded in the background.",
     "… no download and no cached copy; using the one bundled with astropy.",
     "… not usable (…); using the one bundled with astropy."
@@ -873,21 +888,21 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Series updated to the new star format; the original is kept as …_backup.cvseries."
+    "… is in the older star format: it is converted to the new one when the series is next saved (the original is kept as …_backup.cvseries)."
    ],
    "todo": "Nothing. The names, magnitudes and points are the same."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "Series updated to the new star format; the original is already kept as …_backup.cvseries."
+    "… is in the older star format: it is converted to the new one when the series is next saved (the original is already kept as …_backup.cvseries)."
    ],
    "todo": "Nothing."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "Series updated to the new star format in memory; a backup of the original could not be written (…), so the first save keeps it as …_prev.cvseries instead."
+    "… is in the older star format: it is converted to the new one when the series is next saved; a backup of the original could not be written (…), so that save keeps it as …_prev.cvseries instead."
    ],
    "todo": "Nothing, if the folder is writable by the time you save. Otherwise copy the series file somewhere safe first."
   },
@@ -1028,9 +1043,9 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Not taken as a comp: the star is only … px from the frame edge, and its sky ring (out to … px) needs it at least … px in. Pick a star further in."
+    "Not taken as a comp: the star is only … px from the frame edge, so its sky ring (out to … px) runs past the edge and it would be left out of the whole night. Pick a star further in."
    ],
-   "todo": "Pick a star further in."
+   "todo": "Click a star further in."
   },
   {
    "section": "Photometry",
@@ -1740,9 +1755,16 @@
   {
    "section": "Photometry",
    "patterns": [
-    "only … px from the frame edge: its sky ring … needs the star at least … px in …"
+    "only … px from the frame edge: its sky ring (out to … px) runs past the edge, so it would be left out of the whole night — pick a star further in"
    ],
    "todo": "Pick a star further in (for the check, the line may name a green ring S1, S2 … farther in)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… px from the frame edge on this frame (its sky ring needs … px); a comp whose sky ring runs past the edge on any frame is left out of the whole night; stars at least … px in (3 × the sky-out radius) stay clear of the edge and the weakest part of the flat"
+   ],
+   "todo": "Nothing, or pick a star further in. Once the drift is known the line says whether the night takes its ring past the edge."
   },
   {
    "section": "Photometry",
@@ -1755,8 +1777,9 @@
   {
    "section": "Photometry",
    "patterns": [
-    "drifts off the frame later in the night: it is off the frame edge on frames … , so it is not measured there — pick a star further in",
-    "… drifts to the frame edge later in the night: its sky ring … runs past the edge on frames …"
+    "drifts to the frame edge later in the night: its sky ring (out to … px) runs past the edge on frames …, so it would be left out of the whole night — pick a star further in",
+    "drifts off the frame later in the night: it is off the frame edge on frames … , so it is not measured there …",
+    "… its sky ring … runs past the edge on frames …"
    ],
    "todo": "Pick a star further in."
   },
@@ -1859,6 +1882,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "The pointing moved at frames 95–97 (64″) but held for fewer than 5 frames, so it is not a re-center segment of its own: those frames stay with the pointing before them, and a step there is not lined up. A move that short is usually a bad alignment or the end of the night."
+   ],
+   "todo": "Look at those frames' points; reject them in Blink if they step."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics boxes on the Input page)."
    ],
    "todo": "Solve the image, or fill in pixel size and focal length in the Optics boxes, and run the night (or the scan) again."
@@ -1896,7 +1926,8 @@
   {
    "section": "Photometry",
    "patterns": [
-    "C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40.",
+    "C3 left out of the whole night: its sky ring runs past the frame edge in 14 of 40 frames; frames 27–40.",
+    "… missing from 14 of 40 frames (off the frame or its edge) …",
     "The night uses C1, C2 in every frame.",
     "… over the linear limit in 3 frames.",
     "… not measured in 3 of 40 frames"
@@ -2056,7 +2087,14 @@
    "patterns": [
     "The frames are centered at …, 26.4° from … (…). The target isn't in this night's frames. …"
    ],
-   "todo": "Check the telescope's target coordinates (its plan entry) and the target on the Input page. Blink cannot help."
+   "todo": "Check the telescope's target coordinates (its plan entry) and the target on the Input page."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "HIP 115622 is not on the image now on the Photometry page (it is centered 12.5° away): the target is looked for when its own lights are solved."
+   ],
+   "todo": "Nothing. Load the target's lights (or its series) and Calibrate."
   },
   {
    "section": "Photometry",
@@ -2533,9 +2571,10 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "This night's meridian-flip step is … mag ⚠ … Save … with this night now?"
+    "This night's meridian-flip step is … mag ⚠ … Save … with this night now?",
+    "This night's re-center step is … mag ⚠ (the frames after the re-center read …) …"
    ],
-   "todo": "No keeps the file on disk unchanged; Save series keeps the night later. See 9. Reduce a variable-star night."
+   "todo": "No keeps the file on disk unchanged; Not auto-saved: the night's flip step (re-center step) is … goes in the Log. Save series keeps the night later, Remove night… takes it out."
   },
   {
    "section": "Output, Variables mode",

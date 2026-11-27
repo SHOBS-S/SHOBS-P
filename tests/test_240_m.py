@@ -239,10 +239,11 @@ class TestOldSeriesConverts(AppCase):
         backup = os.path.join(self.dir, "HD_219134_backup.cvseries")
         self.assertEqual(open(backup, "rb").read(), original, "the backup is the file as it was")
         self.assertEqual(open(path, "rb").read(), original, "Load does not write the file")
-        said = self.said("new star format")
+        said = self.said("older star format")
         self.assertEqual(len(said), 1, self.lines)
-        self.assertEqual(said[0], "Series updated to the new star format; the original is kept as "
-                                  "HD_219134_backup.cvseries.")
+        self.assertEqual(said[0], "HD_219134.cvseries is in the older star format: it is converted to the new one "
+                                  "when the series is next saved (the original is kept as "
+                                  "HD_219134_backup.cvseries).")   # 2.4.0 cleanup (J)
         self.assertEqual(_numbers(app.observations), want)
         self.assertEqual(app.comp_name.get(), A)
         self.assertEqual(app.comp_mag.get(), "8.728")
@@ -266,7 +267,7 @@ class TestOldSeriesConverts(AppCase):
 
         # a file in the new format is not converted or backed up again
         self.load(path)
-        self.assertEqual(self.said("new star format"), [])
+        self.assertEqual(self.said("older star format"), [])
         self.assertFalse(os.path.exists(os.path.join(self.dir, "HD_219134_backup2.cvseries")))
         self.assertEqual(_numbers(app.observations), want)
         self.assertEqual(app.comp_mag.get(), "8.728")

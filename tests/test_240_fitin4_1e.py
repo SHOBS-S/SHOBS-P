@@ -186,7 +186,7 @@ class TestCompAtTheEdgeIsRefused(unittest.TestCase):
         text = App._comp_ring_off_frame(self._app(), (10.0, 100.0))
         self.assertTrue(text.startswith("Not taken as a comp"), text)
         self.assertIn("10 px from the frame edge", text)
-        self.assertIn("at least 25 px in", text)
+        self.assertIn("runs past the edge and it would be left out of the whole night", text)   # cleanup #119
 
     def test_a_star_far_enough_in_is_taken(self):
         self.assertEqual(App._comp_ring_off_frame(self._app(), (150.0, 100.0)), "")

@@ -168,6 +168,15 @@ class TestTextSize(AppCase):
             self.ca.apply_text_size(root, 150)
             self.assertAlmostEqual(float(root.tk.call("tk", "scaling")), before * 1.5, delta=0.01 * before)   # Tk keeps whole dpi
         finally:
+            # 2.4.0 cleanup (the fitin1c wide-window flake): Tk keeps "tk scaling" per display for the whole
+            # process, so the 150 % set here reached every later window (test_wide_window_keeps_hints_beside saw
+            # the Site box's hints go under at 1600 px wide): put it back
+            try:
+                root.tk.call("tk", "scaling", before)
+                import text_scale
+                text_scale.FACTOR = 1.0
+            except Exception:
+                pass
             root.destroy()
 
     def test_side_bar_choice_is_saved_and_offers_restart(self):

@@ -291,7 +291,10 @@ class TestRunInApp(unittest.TestCase):
         self.assertNotIn("SP", drops)   # a spare off the edge is simply not measured there
         n_c3 = len(drops["C3"]["frames"])
         self.assertGreater(n_c3, 10)
-        self.assertLess(n_c3, len(paths) // 2 + 1)
+        # 2.4.0 cleanup (#119, the one edge rule): out from the first frame its sky ring runs past the edge (not only
+        # once the ring is mostly off), so more frames than before, never all of them
+        self.assertLess(n_c3, len(paths))
+        self.assertIn(core.RING_PAST_EDGE, drops["C3"].get("reasons") or {})
         obs = sorted(app.observations, key=lambda o: o.jd)
         self.assertTrue(all(math.isfinite(o.mag) and "nocomp" not in o.flag for o in obs))
         has = [not o.comp_drop for o in obs]

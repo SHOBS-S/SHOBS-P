@@ -155,7 +155,9 @@ second click is needed on later nights. (A solve of only two catalog stars, whic
 1. On the Input page, change the **Lights** folder (and the calibration folders, if they differ) to the next night's
    frames and press **Scan folders**.
 2. Blink and calibrate as before. The field is solved again, and the watch stars are found by name and sky position.
-   The log says how many were found, for example *"Watch stars: 2 of 3 found on this frame"*.
+   The log says how many were found, for example *"Watch stars: 2 of 3 found on this frame"*. Right after **Load
+   series**, while the image on the Photometry page is still another field's, the log says *"Watch stars: placed
+   after Calibrate on this series' lights …"* instead: they are looked for on the series' own frames (2.4.0).
 3. Press **Scan field**. Watch stars appear in the table as **W** rows (with their periodogram), whether or not they
    reach a suspect level that night.
 

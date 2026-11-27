@@ -213,9 +213,10 @@ class TestSuggestionsFollowTheDrift(unittest.TestCase):
         self.assertIn("80 px in on this frame, but only 20 px on frame", note)
         self.assertNotIn("checked on", note)   # every frame was looked at
         off = app._edge_note("comp", (45.0, 150.0))   # 45 - 60: off the frame by the last frame
-        self.assertIn("drifts off the frame later in the night", off)
-        self.assertTrue(off.startswith("⚠"), off)        # losing the star's light stays a ⚠
-        self.assertIn("not measured there", off)
+        # 2.4.0 cleanup (#119): a comp whose sky ring runs past the edge on any frame is out for the whole night
+        self.assertIn("drifts to the frame edge later in the night", off)
+        self.assertTrue(off.startswith("⚠"), off)
+        self.assertIn("so it would be left out of the whole night", off)
         self.assertEqual(app._edge_note("comp", (330.0, 90.0)), "")   # safe all night: no note
 
     def test_big_frames_are_sampled(self):

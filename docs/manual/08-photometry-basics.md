@@ -783,10 +783,16 @@ and EGAIN is not (…)."* This changes the size of that night's error bars, not 
 
 ### Comps near the frame edge
 
-When the field drifts during the night, a comparison star near the edge can slide partly off the frame. A comp
-counts as missing from a frame when its aperture is partly off the frame, when its sky ring is mostly (over half)
-off the frame, or when it has no light above the sky in that frame. A clipped comp is never measured, so it cannot
-leak into the results.
+When the field drifts during the night, a comparison star near the edge can slide partly off the frame.
+
+**One edge rule (from 2.4.0).** A comp is not measured in a frame where **any part of its sky ring runs past the
+frame edge** (the star is closer to the edge than the sky ring's outer radius). A sky ring cut by the edge gives a
+wrong sky level, so the star would read wrong even with all of its light on the frame. The same test is used
+everywhere: the Stars panel's note when you mark the comp, a comp click (refused when the ring is past the edge on
+the image), each frame of the run, the night's one comp set below, the end-of-run line, Use comps… with a spare, and
+the field scan (chapter 20). A comp also counts as missing from a frame when it has no light above the sky there.
+A clipped comp is never measured, so it cannot leak into the results. (Before this rule a comp was still measured
+with up to half of its sky ring off the frame; on HAT-P-32 b, 19 Oct, such a comp moved the fitted Tc by a minute.)
 
 **One comp set per night (from 2.4.0).** A comp that is missing from **any** frame of the night is left out of the
 **whole night**. So is a comp whose raw peak reaches the **Linear limit** (the SHOBS-FLUX linear ADU, Photometry
@@ -803,8 +809,9 @@ was measured and tied it to the others. Nights with a part-night comp therefore 
 After the run, a line under the "Measured with" line lists what happened, for example:
 
 - *"⚠ 16 frames skipped: every comp lost (off the frame edge) (frames 25–40)."*
-- *"C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40."* and
-  *"The night uses C1, C2 in every frame."* A plain note: nothing to do.
+- *"C3 left out of the whole night: its sky ring runs past the frame edge in 14 of 40 frames; frames 27–40."* and
+  *"The night uses C1, C2 in every frame."* A plain note: nothing to do. (A comp that also left the frame
+  altogether reads *"missing from 14 of 40 frames (off the frame or its edge)"*.)
 - *"C2 left out of the whole night: over the linear limit in 3 frames."*
 - A comp that gives no light above the sky on one frame (a cloud) stays in the night's set; that one frame gets
   no comparison (2.4.0).
@@ -821,7 +828,8 @@ of 14 frames …; those frames use the other comps. …"*) until it is reduced a
 No box comes up after the run (from 2.4.0). The same lines go in the log, each with its night; the ⚠ lines also go
 on the **Findings** list, which opens by itself when the run has something for you to look at (chapter 3). They
 also travel with the result: the settings file lists them and the report's notes say how many there were. A comp or
-check that only came near the edge and was measured in every frame gets a plain log line, no ⚠.
+check that only came near the edge and was measured in every frame (its sky ring never ran past the edge) gets a
+plain log line, no ⚠.
 
 ### Measure skipped frames
 

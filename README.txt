@@ -91,6 +91,14 @@ New in 2.4.0 (S = shared by every mode; GitHub issue numbers in brackets)
 - S  MicroObservatory elevation from the header [108]: the site's elevation now comes from the header's HEIGHT
      (1268 m, Whipple Observatory's base camp) instead of an approximate 2340 m. A results change on
      MicroObservatory nights: the scintillation part of the error bars is about 14 % larger.
+- S  One edge rule for comps [119]: a comp whose sky ring runs past the frame edge on any frame is left out of the
+     whole night (before, it was measured with up to half its sky ring off the frame). The same test everywhere:
+     the Stars panel, a comp click, the run, the end-of-run line, Use comps with a spare, the field scan. A results
+     change on nights with a comp that drifts near the edge (HAT-P-32 b, 19 Oct: Tc moved by about a minute).
+- S  The window keeps moving during long fits [118]: the transit fit, the comp check, the robustness check and the
+     multi-night fits run in a separate helper process (the same numbers, bit for bit). Before, on Windows, the
+     fit held the window up and the busy bar froze. If the helper cannot start, the fits run as before.
+- V  A re-center step that looks like an aperture problem holds the series' automatic save, as a flip step does.
 
 New in 2.3.6 (messages, from the 14 Nov 2026 message review [79]; screen and file text only: every measured
 number is the same as in 2.3.5; S = shared by every mode, T = Transits)
