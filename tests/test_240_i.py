@@ -358,11 +358,12 @@ class TestNits(unittest.TestCase):
                      "planet": {"name": "HD 189733 b", "host": "HD 189733", "period": 2.2186, "k": 0.15}}
         try:
             self.assertFalse(tu.NebWindow.report_of_another_star(tp))
-            with mock.patch.object(tu.messagebox, "showinfo") as box, mock.patch.object(tu, "Toplevel") as top:
+            # 2.4.0 fit-in F4 (m856): an error box now, leading with what to do
+            with mock.patch.object(tu.messagebox, "showerror") as box, mock.patch.object(tu, "Toplevel") as top:
                 tu.NebWindow(app, tp)
             top.assert_not_called()
             words = box.call_args[0][1]
-            self.assertIn("needs the target's RA/Dec", words)
+            self.assertIn("needs the target's RA and Dec. On the Input page press Look up", words)
             self.assertNotIn("The report shown is of", words)
         finally:
             tp.report = None

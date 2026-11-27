@@ -26,4 +26,7 @@ builder cannot take them). Do not reuse an old image for a page that changed: re
 | OPTIONAL NEW img/17-fit-with-saved-priors.png | 17 | the Fit row reading **Fit with the current priors** and the note *This fit used the priors saved in …_settings.txt (period, T0, a/R\*, b, limb darkening), not today's looked-up values.* | NEW SHOT (optional; no image link in the chapter yet) |
 | OPTIONAL NEW img/17-untick-comp.png | 17 | the Comps row with **Open Use comps, untick C3** and the Use comps window opened from it (C3 unticked, the line *C3 is unticked here because the Transit fit moves most when it is left out. …*) | NEW SHOT (optional; no image link yet) |
 | img/20-field-scan-output.png | 20 | nothing in view (the error floor is a Log line; a star's χ²ν × normal can move by a few percent) | reuse |
+| img/17-multinight-window.png (Summary tab, if shown) | 17 | only when the shot shows a timing ⚠: the two warnings read differently (*⚠ Check the time system of every night first …*; *… Compare with one that gives its ±: …*) | RESHOOT only if a timing ⚠ is in the shot |
+| img/20-field-scan-output.png | 20 | #115 retune: the level stays 2.5 and the floor 0.003, so nothing in view changes | reuse |
+| (no shot) | 17 | status bar after a save: *The AAVSO exoplanet report saved earlier (…) is of the fit before this one: …* | none |
 | all others | | nothing of builder F4-3 in view | reuse |

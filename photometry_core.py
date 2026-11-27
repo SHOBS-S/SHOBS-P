@@ -9306,7 +9306,7 @@ def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
 # Suspects by itself). 0 switches the flat-field term off.
 # RETUNE on real nights (fit-in F4, 26 Nov 2026): the two 97-frame GSC 03308-00462 scans (13-14 and 14-15 Nov, 180 s,
 # ASI2600MC TG, 356 mm; about 710 ordinary stars a night = usable, unsaturated, under 2x normal scatter, not in VSX).
-# With and without the floor the ordinary stars' excess chi2nu is the same to 0.03 (99th percentile 2.11 / 2.08 with
+# With and without the floor the ordinary stars' excess chi2nu is the same to 0.04 (99th percentile 2.11 / 2.08 with
 # it, 2.13 / 2.12 without), and 0.006 instead of 0.003 changes no more than that, so the floor stays 0.003. The level
 # stays 2.5 too: stars never near a frame edge have their 99.5th percentile at 2.06 / 2.02, and at 2.5 the own-errors
 # test alone lists 7 and 3 ordinary stars (3 and 2 away from the edges; four of the 13 Nov ones drifted to the frame
