@@ -7073,7 +7073,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.clear_mark(role, redraw=False)
         if dropped and series_loaded:
             # 2.3.6 (m088): with a series open, tonight's comp set differs from it (a star the series does not know)
-            self.log("⚠ Not on this frame, so taken out of tonight's comps (not measured): " + ", ".join(dropped)
+            # 2.4.0 fit-in F4 (#72 rule; sheet sweep): a comp off the image is a plain note
+            self.log("Not on this frame, so taken out of tonight's comps (not measured): " + ", ".join(dropped)
                      + ". Click another star to add a comp if you need one.")
         elif dropped:
             self.log("Cleared, left from an earlier run and not on this frame: " + ", ".join(dropped) + ".")
@@ -7518,7 +7519,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     self._setup_microobservatory(header, len(lights))
                     return
             except Exception as exc:
-                self.log(f"✖ Could not read the first light: {exc}")   # 2.3.6 (audit fix, m105): ✖ and in the Log
+                # 2.3.6 (audit fix, m105): ✖ and in the Log; 2.4.0 fit-in F4 (sweep): with what to do
+                self.log(f"✖ Could not read the first light: {exc}. Check the file opens in another program, set it "
+                         "aside if it is damaged, then press Scan folders again.")
                 return
         self.status.set("Folders scanned.")
 
@@ -20720,7 +20723,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._run_skipped, self._run_night_out, self._run_flip_like = [], {}, []
         self._run_night_why, self._run_night_use, self._run_night_few = {}, {}, {}   # 2.4.0 fit-in F4 (#79 item 4)
         if len(ref_sources) < 3:
-            self.log("⚠ Too few stars found on the reference frame to align frames. Positions will not follow drift.")
+            self.log("⚠ Too few stars found on the reference frame to align frames. Positions will not follow drift. "
+                     "Use a frame with more stars as the reference (reject this one on the Blink page), or check "
+                     "the focus and exposure.")   # 2.4.0 fit-in F4 (sweep): what to do
         if stack_run is not None:   # 2.3.0 (#54): the series' comp layout is put back when the stacks are done
             stack_run["saved"] = {"prev_stars": getattr(self, "_prev_stars", ([], "")),
                                   "comps_used": list(self.comps_used), "check_used": self.check_used}
@@ -21338,7 +21343,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if cancelled:
             if error:   # 2.2.16 (item 3): the worker hit an error outside the per-frame guard
                 self._progress_end("Stopped by an error; nothing was added.")
-                self.log(f"✖ Photometry stopped by an error ({error}). Nothing was added to the series.")
+                self.log(f"✖ Photometry stopped by an error ({error}). Nothing was added to the series. Press Run "
+                         "photometry again; if it stops again, send the log file (Show log) with a bug report.")
                 self._restore_series_catalog(stars=True)
                 return
             self._progress_end("Canceled; nothing was added.")
@@ -21376,7 +21382,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
             except Exception as exc:
-                self.log(f"⚠ Color fit failed: {type(exc).__name__}: {exc} — continuing without the color term.")
+                self.log(f"⚠ Color fit failed: {type(exc).__name__}: {exc} — continuing without the color term: "
+                         "the magnitudes are not color-corrected. Run photometry again; if it fails again, untick "
+                         "Also measure R and B.")
         append = False
         plan = None
         same_mode = not self.series_mode or self.series_mode == self.mode_key or self.series_mode_unknown   # 2.2.14

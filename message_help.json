@@ -331,6 +331,27 @@
   {
    "section": "Input",
    "patterns": [
+    "Lights: OBJECT … is the Star ID, but they point N° from the RA/Dec on the Input page, so … is looked up again (the RA/Dec is replaced by what SIMBAD or VSX gives)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Lights: OBJECT … is the Star ID, but they point N° from its RA/Dec, also after looking it up again. …"
+   ],
+   "todo": "Check the Star ID (is it the star in these frames?), or type the field's RA/Dec on the Input page."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "The camera binned these frames (XBINNING=2) by mixing the red, green and blue pixels: the colour channels are identical … Capture unbinned and set Binning here instead; for these frames use them as unfiltered (CV) data."
+   ],
+   "todo": "Capture unbinned next time and set Binning in SHOBS-P. Do not use B-V or V-R from these frames."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "TOI-2046: SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look up again."
    ],
    "todo": "Type RA/Dec, or press Look up again later. If the answer still comes in, it is used. For a planet the line is under the planet boxes and says … the NASA Exoplanet Archive did not answer within 60 s — type the values or Look up again."
@@ -559,9 +580,16 @@
   {
    "section": "Calibrate",
    "patterns": [
-    "The Flat folder mixes camera angles: …"
+    "Flats: 20 of 40 used for the master flat, the ones taken at the lights' camera angle (30°). Left out: 2° (20 files)."
    ],
-   "todo": "Keep only the flats taken at the lights' angle."
+   "todo": "Nothing. Move the other flats to their own folder if you like."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "The Flat folder mixes camera angles: … Fewer than 3 of them were taken at the lights' angle (…°), too few for a master flat of their own."
+   ],
+   "todo": "Stop (the default) and take or pick flats at the lights' angle; Use all these flats goes on with a master that matches none exactly."
   },
   {
    "section": "Calibrate",
@@ -946,6 +974,14 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Aperture re-fitted to this field: r = 8 px was kept from the last field, and it is 3.5 × the stars' FWHM here (2.3 px). Now r 4.1, sky 8–12 px. The comp survey tries the sizes around it …",
+    "… and it clips the ring of these defocused stars …"
+   ],
+   "todo": "Nothing; the boxes are yours to change."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Defocused stars: the aperture (r = … px) clips the ring — use r ≥ … px. …"
    ],
    "todo": "Use r = … and run (the default) sets the suggested sizes (95 % of the light) and runs."
@@ -1085,7 +1121,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Not on this frame, so taken out of tonight's comps (not measured): C2 …"
+    "Not on this frame, so taken out of tonight's comps (not measured): C2 … Click another star to add a comp if you need one."
    ],
    "todo": "Nothing, if the other comps are enough. Click another star to add a comp if you need one. Without a series open the line is a plain Cleared, left from an earlier run …"
   },
@@ -1115,9 +1151,31 @@
   {
    "section": "Photometry",
    "patterns": [
-    "… marker at (x, y) is N px from the center of the star there …"
+    "Comp 2 marker re-centred on its star before the run: moved 4.2 px, from (…) to (…)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The Check marker at (x, y) is N px from the nearest star, at (…). That is further than the aperture radius (… px), so it may be another star than the one you meant. Move the marker onto that star?"
+   ],
+   "todo": "Move it onto that star if that is your star. Leave it measures where it is marked."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… marker at (x, y) is N px from the center of the star there … Left where it is, as chosen: the frames are measured beside the star, so it reads faint. …"
    ],
    "todo": "Clear the marker, zoom in and click the star again, unless you meant it."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Binning changed: 3 markers moved to the same stars on the new image (x2) and re-centred.",
+    "No star was found under Comp 2 on the new image …"
+   ],
+   "todo": "Nothing. For a marker with no star under it, Run photometry re-centres it or asks."
   },
   {
    "section": "Photometry",
@@ -1168,7 +1226,32 @@
    "patterns": [
     "AAVSO sequence did not answer (503 from apps.aavso.org); asking again in the background …"
    ],
-   "todo": "Wait: the log says if it answers, and then Solve again uses it."
+   "todo": "Nothing: when it answers, its stars are put to use by themselves."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… did not answer (…); its stars are missing for now. It is asked again by itself in about 45 s; its stars are added then, with nothing to press.",
+    "Variable-star check: VSX and SIMBAD could not be reached …"
+   ],
+   "todo": "Nothing. You can go on marking stars meanwhile."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "AAVSO sequence answered on retry 2, 31 s after it was first asked: 12 sequence stars (chart …); they are put to use now, by themselves.",
+    "Gaia DR3: the deep part (VizieR, to G 19) arrived after the solve … Kept for this field; they are put to use now, by themselves.",
+    "Catalog answers arrived after the solve: solving again by itself to use them (nothing is asked twice)."
+   ],
+   "todo": "Nothing. Before 2.4.0 you had to press Solve again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… It did not answer after 3 more tries by itself; it is asked again at the next solve.",
+    "Solve: the catalog request failed (…). … Press Solve again (top right) to try now."
+   ],
+   "todo": "Go on without its stars, or press Solve again later."
   },
   {
    "section": "Photometry",
@@ -1234,6 +1317,35 @@
     "Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health after the run shows how they did)."
    ],
    "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2: now TYC 4006-956-1. Magnitude was 11.23, now 10.87; the marker moved 212 px to that star.",
+    "…; the same star, so the marker stays."
+   ],
+   "todo": "Check the two magnitudes are what you expect."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "✓ Comp 2 renamed to …; the marker stays where it is and the magnitude is unchanged (the name is not a star this image knows; ✕ clears the marker, then Enter looks the name up)."
+   ],
+   "todo": "To use another star: ✕, then type its name and press Enter, or click it."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Zenith keyhole: 3 of the 10 frames taken above 85° altitude are smeared (stars up to 1.6 × longer than wide; the night's usual is 1.08): frames 19–21. …"
+   ],
+   "todo": "Look at the named frames on the Blink page, reject the bad ones, and run photometry again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp survey and comp suggestions skipped: a series is loaded, and a series keeps its own comps (Comp health after the run shows how they did). … is not on this image tonight, so it is not measured; the name stays in the series."
+   ],
+   "todo": "Nothing. To change the series' comps use Use comps… on the Output page."
   },
   {
    "section": "Photometry",
@@ -1460,17 +1572,34 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Linear limit … ADU: raw peak at or above it in … frames …"
+    "Linear limit … ADU: raw peak at or above it in … frames … Shorter exposures or more defocus next time; a comp over the limit is left out of the night by itself."
    ],
-   "todo": "Check Comp health…'s Over linear limit column; prefer stars that stay under it."
+   "todo": "Shorter exposures or more defocus next time. For the check star, pick a fainter one."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page).",
-    "… left out of … (…); those frames use the other comps. …"
+    "C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40.",
+    "The night uses C1, C2 in every frame.",
+    "… over the linear limit in 3 frames."
    ],
-   "todo": "Take the comp out with Use comps… on the Output page if the night shows steps where it comes and goes; pick a comp further in next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
+   "todo": "Nothing. Pick a comp further in, or a fainter one, next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "That leaves only C1 for the night. Add a comp that stays on the frame and under the linear limit all night (a spare comp with Use comps…, Output page), then press Run photometry.",
+    "… leaves no comp …",
+    "No comp was measured in every frame: the night stands on C2, and the frames without it have no magnitude. …"
+   ],
+   "todo": "Add a comp that stays on the frame all night: Use comps… on the Output page can bring in a spare."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page)."
+   ],
+   "todo": "Take the comp out with Use comps… if the night shows steps, or reduce the night again: 2.4.0 leaves such a comp out of the whole night."
   },
   {
    "section": "Photometry",
@@ -1528,9 +1657,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "The field turned by 180° between frames … — that looks like a meridian flip. Is the Mount set right (German equatorial)? …"
+    "The field turned by 180° between frames … and …: a meridian flip. The frames on the other side of it are treated as after a flip, as on a German equatorial mount (Mount is set to Alt-az; …).",
+    "N frames marked as the flip segment."
    ],
-   "todo": "If it was a flip, set Mount to German equatorial (Input page, Optics box) and run photometry again."
+   "todo": "Nothing. Set Mount to German equatorial (Input page, Optics box) if that is what this mount is."
   },
   {
    "section": "Photometry",

@@ -107,7 +107,8 @@ class TestApp(unittest.TestCase):
         self.assertEqual(len(dropped), 1)
         self.assertIsNone(app.comp_xy)
         self.assertEqual(app.comp_name.get(), "")
-        self.assertTrue(lines and lines[0].startswith("⚠ Not on this frame, so taken out of tonight's comps"), lines)
+        # 2.4.0 fit-in F4 (#72 rule): a comp off the image is a plain note now
+        self.assertTrue(lines and lines[0].startswith("Not on this frame, so taken out of tonight's comps"), lines)
 
     def test_leftover_without_series_is_cleared(self):
         app = self.app
