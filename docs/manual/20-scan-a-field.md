@@ -121,8 +121,17 @@ frame's airmass and exposure and the site's elevation; the same formula as the V
 and a flat-field floor of 0.003 mag. The Log says what was added, for example *"Scan errors: flat-field floor 0.003
 mag and scintillation 0.0021 mag (median of 97 frames) added to every point's photon and sky noise."* Without a
 telescope aperture, a site or a position for the field, the scintillation part is left out and the line says so.
-The suspect level stays 2.5. Because each star is still compared with stars as bright, the floor changes a star's
-**χ²ν × normal** only a little; a scan made again with 2.4.0 can still list a star or two more or fewer.
+Because each star is still compared with stars as bright, the floor changes a star's **χ²ν × normal** only a little;
+a scan made again with 2.4.0 can still list a star or two more or fewer.
+
+**Why 2.5.** The level was checked on two real nights of the S033 field (13–14 and 14–15 Nov 2026, 97 frames of
+180 s each, about 710 ordinary stars a night: not saturated, not a known variable, under 2 × normal). Half of them
+read under 1.0, 99 in 100 under 2.1, and stars that never come near a frame edge 199 in 200 under 2.1 on both nights.
+At 2.5 the second test alone listed 7 and 3 ordinary stars (four of the first night's had drifted to the edge of the
+frame). S033 read 4.3 and 5.9, and the field's known short-period variables 3.4 or more, on both nights. A higher
+level (3.0) would have dropped only three ordinary stars from the first night and none from the second, and S033
+reads as low as 2.7 to 3.0 on the first night, depending on which frames are in. So the level stays 2.5. A suspect
+by this test alone that sits near the edge of the frame deserves a look at its light curve before anything else.
 
 On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
 star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks

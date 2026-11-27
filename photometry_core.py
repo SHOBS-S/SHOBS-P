@@ -9267,6 +9267,7 @@ def parse_coordinates(text: str):
 # (the scan's "Suspect at (x normal)" box) OR at SUSPECT_EXCESS_CHI2 x the chi2nu that stars as bright show against
 # their own errors that night. Tuned on the 13-14 Nov GSC 03308-00462 scan: S033 (APASS J024812.2+505255, a delta Sct
 # found by eye at 2.06x) has excess chi2nu 2.78; at 2.5 that night has 10 Suspects of 693 usable stars (2 by 3x).
+# 2.4.0 fit-in F4 (#115): checked again on both nights with the error floor in; 2.5 stands (see SCAN_FLAT_FLOOR_MAG).
 SUSPECT_FACTOR = 3.0
 SUSPECT_EXCESS_CHI2 = 2.5
 CHI2_TERM_CAP = 25.0   # one point adds at most 5 sigma squared to chi2 (a cosmic ray or hot pixel stays one point)
@@ -9299,11 +9300,20 @@ def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
 # site height; every star twinkles on its own, and the zero point is a median over many stars, so the star's own
 # scintillation is the whole term) and a flat-field floor, the same for every point.
 # SCAN_FLAT_FLOOR_MAG is the tunable constant: 0.003 mag (0.3 %) is a usual flat-field / pixel-to-pixel residual for
-# an amateur CMOS with sky or panel flats. It has NOT been tuned on scan nights yet (the S033 GSC 03308-00462 nights
-# were not at hand when this was built), and SUSPECT_EXCESS_CHI2 stays at 2.5 until it is: the normalise-then-cap of
-# step 7b still runs after the floor, so a floor that is too low only leaves more for that widening to do, and a floor
-# that is too high flattens the bright stars' chi2nu towards the same typical value for all of them (the excess is a
-# ratio to stars as bright, so it does not make Suspects by itself). 0 switches the flat-field term off.
+# an amateur CMOS with sky or panel flats. The normalise-then-cap of step 7b still runs after the floor, so a floor
+# that is too low only leaves more for that widening to do, and a floor that is too high flattens the bright stars'
+# chi2nu towards the same typical value for all of them (the excess is a ratio to stars as bright, so it does not make
+# Suspects by itself). 0 switches the flat-field term off.
+# RETUNE on real nights (fit-in F4, 26 Nov 2026): the two 97-frame GSC 03308-00462 scans (13-14 and 14-15 Nov, 180 s,
+# ASI2600MC TG, 356 mm; about 710 ordinary stars a night = usable, unsaturated, under 2x normal scatter, not in VSX).
+# With and without the floor the ordinary stars' excess chi2nu is the same to 0.03 (99th percentile 2.11 / 2.08 with
+# it, 2.13 / 2.12 without), and 0.006 instead of 0.003 changes no more than that, so the floor stays 0.003. The level
+# stays 2.5 too: stars never near a frame edge have their 99.5th percentile at 2.06 / 2.02, and at 2.5 the own-errors
+# test alone lists 7 and 3 ordinary stars (3 and 2 away from the edges; four of the 13 Nov ones drifted to the frame
+# edge on a night that drifted 215 px). 3.0 would list 4 and 3, a small gain, and would put S033 at risk: it reads
+# 4.27 and 5.85 on these scans, but 3.00 on 13 Nov without its four cloud frames and 2.66-2.78 in John's own saved
+# scans of that night. The known short-period variables on the frame stay Suspects on both nights (GSC 03308-00462
+# 3.4 / 12.4, the two BEST EW stars over 10).
 SCAN_FLAT_FLOOR_MAG = 0.003
 
 

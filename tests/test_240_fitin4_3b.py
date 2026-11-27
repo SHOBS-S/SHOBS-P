@@ -1,6 +1,7 @@
 """2.4.0 fit-in F4-3, part 2: #115 finish. The field scan's per-point errors get a floor (scintillation and a
-flat-field term) before the excess chi2nu Suspect test. The Suspect level stays 2.5: the retune on real scan nights
-is still to do (the nights were not at hand), so these tests fix the mechanics and that the floor does no harm."""
+flat-field term) before the excess chi2nu Suspect test. The Suspect level stays 2.5 and the flat-field floor 0.003:
+the retune on the two real GSC 03308-00462 scan nights (26 Nov, numbers beside SCAN_FLAT_FLOOR_MAG) found nothing to
+gain from moving either. These tests fix the mechanics and that the floor does no harm."""
 import inspect
 import math
 import os
@@ -33,7 +34,7 @@ def field(seed=1, n_frames=97, n_stars=600, floor_true=0.004, amp=0.012, var_at=
 class Floor(unittest.TestCase):
     def test_constant_and_level(self):
         self.assertEqual(core.SCAN_FLAT_FLOOR_MAG, 0.003)
-        self.assertEqual(core.SUSPECT_EXCESS_CHI2, 2.5)        # not retuned without real nights
+        self.assertEqual(core.SUSPECT_EXCESS_CHI2, 2.5)        # retuned on the two real nights: 2.5 stands
 
     def test_flat_floor_alone_when_scintillation_is_unknown(self):
         self.assertAlmostEqual(core.scan_error_floor(), 0.003)

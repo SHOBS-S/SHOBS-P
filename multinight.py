@@ -837,6 +837,9 @@ def _med_err(v):
 
 
 # ---- Timing: O − C and linear ephemerides -----------------------------------------------------------------------
+# 2.4.0 fit-in F4 (m663): an ephemeris with no ± cannot be judged against: which one to compare with instead
+TIMING_COMPARE = ("Compare with one that gives its ±: read the line for the input ephemeris, or type Exoplanet "
+                  "Watch's or ExoClock's (with its ±) as the alternative.")
 ALT_EPH_FORM = ("Type T0 as a BJD_TDB (for example 2460123.45678) and the period in days, each with its ± "
                 "(leave a ± empty when the source gives none).")
 
@@ -1030,13 +1033,14 @@ def timing_statements(a: dict) -> list:
         elif eph.get("t0_err") is None:
             out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), and {agree}. That ephemeris states no uncertainty, "
-                                "so this cannot tell an out-of-date ephemeris from a timing problem; compare with an "
-                                "ephemeris that gives its ± (the input one, or the joint fit's own)."))
+                                "so this cannot tell an out-of-date ephemeris from a timing problem. "
+                                + TIMING_COMPARE))   # 2.4.0 fit-in F4 (m663): the comparison to make, named
         else:
-            out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
+            # 2.4.0 fit-in F4 (m664): leads with the action
+            out.append(("warn", "⚠ Check the time system of every night first (BJD_TDB, and the ephemeris in BJD_TDB "
+                                f"too): against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), more than that ephemeris's own uncertainty "
-                                f"({eph_txt} at these epochs). Check that every night is in BJD_TDB and that the ephemeris is in "
-                                "BJD_TDB too; a real period change needs many more epochs to show."))
+                                f"({eph_txt} at these epochs). A real period change needs many more epochs to show."))
     own = a.get("own")
     if own:
         lin = own["eph"]

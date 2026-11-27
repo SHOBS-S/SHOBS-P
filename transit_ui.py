@@ -3986,9 +3986,23 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}\n\n{SAVE_ELSEWHERE}")
             return
-        self.app.status.set(f"Wrote {path}")
+        self.app.status.set(f"Wrote {path}" + self._aavso_older_fit_note())
         self.app.log(f"Transit plot PNG: {path}")
         self._save_corner_beside(path)
+
+    def _aavso_older_fit_note(self) -> str:
+        """2.4.0 fit-in F4 (nit, 6 Nov): the plot PNG and the CSVs of a new fit are saved while the AAVSO exoplanet
+        report on disk (saved this session, same night) is still the earlier fit's: one plain sentence for the status
+        line and the Log says so and names the button. '' when no report was saved or it is of this fit."""
+        saved = self.__dict__.get("_aavso_saved")
+        if not saved or not self.result:
+            return ""
+        if saved["serial"] == fit_serial(self.result) or saved["nights"] != tuple(self._fit_nights() or ()):
+            return ""
+        note = (f" The AAVSO exoplanet report saved earlier ({os.path.basename(saved['path'])}) is of the fit before "
+                "this one: press Save AAVSO exoplanet report… to save this fit's.")
+        self.app.log(note.strip(), keep_status=True)
+        return note
 
     def _save_corner_beside(self, png_path: str) -> str:
         """2.2.19 (#31): the corner plot beside the transit PNG, as <stem>_corner.png. A failure here never costs the
@@ -4091,7 +4105,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             import multinight
             app._remember_report(multinight.FIT_CSV_KEY, self._fit_nights(), fit_path)
         app.status.set(app._series_note(f"Wrote {os.path.basename(path) + ' and ' if path else ''}"
-                                        f"{os.path.basename(fit_path)}"))
+                                        f"{os.path.basename(fit_path)}") + self._aavso_older_fit_note())
         self._series_hint_after_save()
 
     def _write_png(self, path: str):
@@ -4197,6 +4211,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                                             f"{SAVE_ELSEWHERE}", parent=self.app)
             return
         self.app.log(f"AAVSO exoplanet report: {path}")
+        # 2.4.0 fit-in F4 (nit, 6 Nov): which fit this report holds, so a later save of another fit's files can say
+        # that the report is the earlier fit's (_aavso_older_fit_note)
+        self._aavso_saved = {"serial": fit_serial(self.result), "path": path,
+                             "nights": tuple(self._fit_nights() or ())}
         self._write_settings(path, meta)
         self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)
         if self.report is None:
