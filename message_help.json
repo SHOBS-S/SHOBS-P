@@ -2532,6 +2532,13 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "The AAVSO exoplanet report saved earlier (AAVSO_…_SHOBS-P.txt) is of the fit before this one: press Save AAVSO exoplanet report… to save this fit's."
+   ],
+   "todo": "Press Save AAVSO exoplanet report… if you want the report of the new fit too (it is saved under the next number, the earlier one is kept)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Comps checked: depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min (all comps 1.84 %; without each 1.80–1.88 %)",
     "Comps checked: depth spread …, Tc spread …"
    ],
@@ -2786,6 +2793,20 @@
     "No published ephemeris: epochs counted from the first night."
    ],
    "todo": "Nothing; type an alternative ephemeris to see O − C against it. The ⚠ form (… ; Look up.) means no lookup answered."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Check the time system of every night first (BJD_TDB, and the ephemeris in BJD_TDB too): against the input ephemeris (…) the nights are late by +6.2 ± 0.8 min (fit errors only), more than that ephemeris's own uncertainty (±1.1 min at these epochs). A real period change needs many more epochs to show."
+   ],
+   "todo": "Check each night's time system and the PC clock of those nights, then the ephemeris's. If all are right, keep observing: a period change needs many more epochs."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Against the alternative ephemeris (…) the nights are late by … min (fit errors only), and …. That ephemeris states no uncertainty, so this cannot tell an out-of-date ephemeris from a timing problem. Compare with one that gives its ±: read the line for the input ephemeris, or type Exoplanet Watch's or ExoClock's (with its ±) as the alternative."
+   ],
+   "todo": "Read the line for the other ephemeris, or type one with its ± as the alternative and press Apply."
   },
   {
    "section": "Discovery mode",

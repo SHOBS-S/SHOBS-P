@@ -582,7 +582,9 @@ back. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md) for t
 When the verdict is "detected" and you are happy with the fit:
 
 1. Set an **Output** folder on the Input page if you have not, so every save goes there without asking.
-2. Click **Save AAVSO exoplanet report…**. The status bar names the file.
+2. Click **Save AAVSO exoplanet report…**. The status bar names the file. If you fit the night again afterwards and
+   save the plot or the CSVs, the status bar reminds you that the report on disk is still the earlier fit's (from
+   2.4.0): press the button again to save the new fit's report.
 3. Click **Open AAVSO Exoplanet Database…** (beside it on the Results row) and upload the report there, following the AAVSO's current
    instructions.
 4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**. The TOI line under the Results row
