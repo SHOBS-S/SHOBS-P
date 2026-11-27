@@ -19,6 +19,7 @@ from tkinter import BOTH, END, LEFT, RIGHT, W, X, BooleanVar, DoubleVar, StringV
 import numpy as np
 
 import photometry_core as core
+import fit_process  # 2.4.0 cleanup (#118)
 import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
@@ -154,6 +155,7 @@ CSV_NEEDS = "Run photometry or open an exoplanet report, and fit a transit first
 CORNER_NEEDS = "Fit a transit first: the corner plot shows that fit's MCMC samples."
 TRIM_TYPE_FIRST = ("Type a From and/or To time (the site's local time, HHMM or HH:MM, or BJD_TDB), or drag across "
                    "the plot.")
+FIT_RUNNING = "Fitting the transit… the busy bar at the lower left names each step."
 EPH_WAIT = "Fit transit: waiting for the ephemeris…"
 # 2.4.0 fit-in F2 review (S2, S3): a queued Fit transit (m787) belongs to the report and planet it was pressed for
 FIT_CALLED_OFF = "Fit transit called off (it was waiting for the ephemeris)."
@@ -1897,6 +1899,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self.app._job_words("Fitting the transit: least-squares fit…")
             self._fitting = True
             self._show_progress()
+            # 2.4.0 cleanup (B, F4 card 1): while the fit runs the page no longer says "press Fit transit"
+            self._notes_text([("info", FIT_RUNNING)])
+            if self.result is None:
+                self.draw(placeholder=FIT_RUNNING)
             app = self.app
 
             def progress(phase, done, total, label=None, sub=None):
@@ -1936,7 +1942,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                         ks, ds, ok = tc.published_rp_cached(pname, timeout=10, with_status=True)
                         planet["k_published"], planet["depths_listed"] = ks, ds
                         app.call_ui(keep_rp, ks, ds, ok)   # Fable N9: the page's dicts change on the Tk thread
-                    result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
+                    # 2.4.0 cleanup (#118): in the helper process, so the window keeps its speed
+                    result = fit_process.call(tc.fit_transit, t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
                                             detrend_curve=dq, detrend_auto=auto,
                                             mcmc_steps=steps, progress=progress, cancel=cancel,
                                             log=lambda m: app.call_ui(app.log, m), after_flip=after,
@@ -2064,7 +2071,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
 
         def work():
             try:
-                loo = tc.leave_one_comp_out(job["t"], job["flux"], job["err"], job["am"], job["comp_mags"],
+                loo = fit_process.call(tc.leave_one_comp_out, job["t"], job["flux"], job["err"], job["am"], job["comp_mags"],
                                             job["names"], job["planet"], summary,
                                             # 2.4.0 (#103): the main fit's detrend (Auto's choice, not Auto again)
                                             detrend_airmass=fl_[0], detrend_time=fl_[1], detrend_curve=fl_[2],
@@ -2234,7 +2241,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 measured, why_not = [], (plan or {}).get("why", "")
                 if plan and not why_not:
                     measured, why_not = self._robust_remeasure(plan, token, cancel)
-                rob = tc.robustness_check(
+                rob = fit_process.call(   # 2.4.0 cleanup (#118)
+                    tc.robustness_check,
                     job["t"], job["flux"], job["err"], job["am"], job["planet"], summary, fl_,
                     after_flip=job["after"], flip_step=flip_step, flagged_mask=job["flagged_mask"],
                     # 6c-2: a gated main step means every refit gates its own step

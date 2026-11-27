@@ -50,6 +50,7 @@ import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
 import ui_watch   # 2.4.0 fit-in F1 (#116)
+import fit_process   # 2.4.0 cleanup (#118)
 import iers_bg    # 2.4.0 fit-in F1 (#116): astropy's IERS table refresh off the Tk thread
 import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
 import page_scroll   # 2.4.0 fit-in F1c (#109)
@@ -4002,8 +4003,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return ""
         h, w = self.preview.shape[:2]
         dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
-        need = sky_out + 5.0
+        need = sky_out   # 2.4.0 cleanup (#119): the one edge rule (core.sky_ring_past_edge), not sky-out + 5 px
         safe = 3.0 * sky_out
+        is_comp = bool(comp_number(role))
         drift = self._series_drift()
         night = self._drift_clearance(xy, drift) if drift else None
         if night is not None and night[0] < min(dist, safe):
@@ -4016,12 +4018,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                        f" (checked on {len(drift['regs'])} of the night's {drift.get('of', 0)} lights)")
             if lost or cut:
                 which = lost or cut
-                note = ("⚠ drifts off the frame later in the night: it is off the frame edge" if lost else
-                        f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) runs "
-                        "past the edge") + (f" on frame{'s' if len(which) != 1 else ''} "
-                                            f"{core.frame_list_text(which, 12)}{checked}"
-                                            + (", so it is not measured there" if lost else "")
-                                            + " — pick a star further in")
+                if is_comp:
+                    # 2.4.0 cleanup (#119, John 27 Nov): a comp whose sky ring runs past the edge on ANY frame is out
+                    # for the whole night (the one edge rule), whether it loses its ring or its light
+                    note = (f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) "
+                            f"runs past the edge on frame{'s' if len(which) != 1 else ''} "
+                            f"{core.frame_list_text(cut, 12)}{checked}, so it would be left out of the whole "
+                            "night — pick a star further in")
+                else:
+                    note = ("⚠ drifts off the frame later in the night: it is off the frame edge" if lost else
+                            f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) "
+                            "runs past the edge") + (f" on frame{'s' if len(which) != 1 else ''} "
+                                                     f"{core.frame_list_text(which, 12)}{checked}"
+                                                     + (", so it is not measured there" if lost else "")
+                                                     + " — pick a star further in")
             else:
                 # 2.4.0 fit-in F4 (m028, John's call 26 Nov): the sky ring stays on the frame all night, so the star is
                 # measured in every frame: a plain note (a ⚠ is kept for a star that loses its ring or its light)
@@ -4029,15 +4039,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         f"{near_px:.0f} px on frame {at}{checked}; stars at least {safe:.0f} px in all night (3 × the "
                         "sky-out radius) stay clear of the edge and the weakest part of the flat")
         elif dist < need:
-            note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
-                    f"star at least {need:.0f} px in, with room for drift — pick a star further in")
+            note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) runs past "
+                    "the edge" + (", so it would be left out of the whole night" if is_comp else "")
+                    + " — pick a star further in")
         elif dist < safe and night is not None and night[0] >= need:
             # 2.4.0 fit-in F4 (sheet row m028): the night's real drift was checked and the star keeps its sky ring
             # on the frame all night: nothing to say (the fixed 3 × sky-out margin is for a night not checked yet)
             return ""
         elif dist < safe:
-            note = (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
-                    "stay clear of the edge and the weakest part of the flat")
+            # 2.4.0 cleanup (#119): plain, as m028: the sky ring is on this frame; drift is checked at Calibrate
+            note = (f"{dist:.0f} px from the frame edge on this frame (its sky ring needs {need:.0f} px)"
+                    + ("; a comp whose sky ring runs past the edge on any frame is left out of the whole night"
+                       if is_comp else "")
+                    + f"; stars at least {safe:.0f} px in (3 × the sky-out radius) stay clear of the edge and the "
+                    "weakest part of the flat")
         else:
             return ""
         if role == "check":
@@ -14941,12 +14956,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             return ""
         h, w = self.preview.shape[:2]
-        dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
-        need = sky_out + 5.0
-        if dist >= need:
+        if not core.sky_ring_past_edge((h, w), xy[0], xy[1], sky_out):   # 2.4.0 cleanup (#119): the one edge rule
             return ""
-        return (f"Not taken as a comp: the star is only {max(dist, 0):.0f} px from the frame edge, and its sky ring "
-                f"(out to {sky_out:g} px) needs it at least {need:.0f} px in. Pick a star further in.")
+        dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
+        return (f"Not taken as a comp: the star is only {max(dist, 0):.0f} px from the frame edge, so its sky ring "
+                f"(out to {sky_out:g} px) runs past the edge and it would be left out of the whole night. Pick a star "
+                "further in.")
 
     def _neighbor_at_pick(self, role: str):
         """2.4.0 fit-in F4 (m234): another star inside the aperture of the star just marked is said at pick time, on
@@ -21630,7 +21645,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                 # field_defocus of their own, which cost ~0.5 s each and could decide otherwise)
                                 core.seed_field_defocus(img, defocus if donut else False)
                             chan_imgs[ch] = img
-                            chan[ch] = core.channel_inst_mags(img, stars_tc, radius, sky_in, sky_out, exp)
+                            chan[ch] = core.channel_inst_mags(img, stars_tc, radius, sky_in, sky_out, exp,
+                                                              ring_rule_from=1)   # #119: not the target
                         if cal_xy is not None and (i - 1) % cal_step == 0:
                             try:
                                 pos = core.move_points(cal_xy, reg, data.shape)
@@ -24705,6 +24721,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         tp = getattr(self, "transit_page", None)
         if tp is not None:
             tp._fit_queued = None   # review S3: nothing queued outlives the window
+        try:
+            fit_process.shutdown()   # 2.4.0 cleanup (#118): the fit helper ends with the window
+        except Exception:
+            pass
         super().destroy()
 
     def close_series(self, asked: bool = False):
@@ -33148,6 +33168,11 @@ def main():
     global UPDATE_CHECK
     UPDATE_CHECK = True   # 2.3.3 (#57): the real program asks GitHub (tests and the self-test never do)
     iers_bg.start(log_to_file)   # 2.4.0 fit-in F1 (#116): the 21.7 s post-solve freeze was astropy downloading IERS-A
+    # 2.4.0 cleanup (#118): the long fits run in a helper process (the window keeps its speed); started now, in
+    # the background, so the first fit does not wait for it
+    fit_process.ENABLED = True
+    fit_process.set_logger(log_to_file)
+    fit_process.warm_up()
     app = App()
     app._ui_watch = ui_watch.UIWatch(log_to_file).start()   # 2.4.0 fit-in F1 (#116): stalls and where, in the log file
     app.mainloop()

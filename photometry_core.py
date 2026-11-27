@@ -2156,6 +2156,25 @@ def aperture_clip_reason(shape, x: float, y: float, radius: float, sky_inner: fl
     return ""
 
 
+RING_PAST_EDGE = "sky ring runs past the frame edge"   # 2.4.0 cleanup (#119): reduce_frame's comp_drop reason
+
+
+def edge_distance(shape, x: float, y: float) -> float:
+    """Pixels from (x, y) to the nearest frame edge (rows, cols shape); NaN position -> NaN."""
+    h, w = int(shape[0]), int(shape[1])
+    return float(min(x, y, (w - 1) - x, (h - 1) - y))
+
+
+def sky_ring_past_edge(shape, x: float, y: float, sky_out: float) -> bool:
+    """2.4.0 cleanup (#119, John 27 Nov): THE edge rule for comps. True when the star's sky ring (out to sky_out px)
+    runs past the frame edge at (x, y): any part of the ring off the frame. A comp for which this is true on ANY
+    frame of a night is out for that whole night (reduce_frame drops it from the frame with RING_PAST_EDGE, and the
+    night's one comp set, night_ensemble, then leaves it out of every frame). The star panel, a comp click (m027),
+    the end-of-run note (m028) and the scan's own-errors test (scan_near_edge) all use this one test."""
+    d = edge_distance(shape, x, y)
+    return not (d >= float(sky_out))   # NaN position counts as past the edge
+
+
 def light_centroid(img: np.ndarray, x: float, y: float, window: float, sky_in: float | None = None,
                    sky_out: float | None = None, exclude=(), iters: int = 25) -> dict:
     """2.2.19 (#30): the sky-subtracted, light-weighted centroid inside `window` px of the center, iterated until it
@@ -4006,6 +4025,10 @@ def reduce_frame(
         # 2.3.0 (#50): a comp off the edge (or clipped, or with no flux) is left out of this frame only; the frame is
         # measured with the other comps (before, the whole frame was thrown away: TrES-3 b lost 64 of 206 frames).
         why = aperture_clip_reason(img.shape, cx, cy, radius, sky_inner, sky_outer)
+        if not why and sky_ring_past_edge(img.shape, cx, cy, sky_outer):
+            # 2.4.0 cleanup (#119, the one edge rule): a comp with part of its sky ring off the frame is a partial
+            # sky; it is not measured here, so the night's one comp set leaves it out of the whole night
+            why = RING_PAST_EDGE
         measured = None
         if not why:
             try:
@@ -7631,11 +7654,14 @@ def night_set(m: np.ndarray, over=None, rows=None, soft=None) -> dict:
             "over": {j: c for j, c in hot.items() if c}, "few": few, "frames": n_rows}
 
 
-def night_set_reason(missing: int, over: int, frames: int, edge: bool = True) -> str:
+def night_set_reason(missing: int, over: int, frames: int, edge: bool = True, ring: bool = False) -> str:
     """2.4.0 fit-in F4: why a comp is out for the night, in plain words. F4 review S1: edge=False when SHOBS-P has no
-    reason on file for the missing frames (a night reduced before 2.3.0): it does not say the star left the frame."""
+    reason on file for the missing frames (a night reduced before 2.3.0): it does not say the star left the frame.
+    2.4.0 cleanup (#119): ring=True when every missing frame is the one edge rule's (sky ring past the edge)."""
     parts = []
-    if missing and edge:
+    if missing and edge and ring:
+        parts.append(f"its sky ring runs past the frame edge in {missing} of {frames} frame{'s' if frames != 1 else ''}")
+    elif missing and edge:
         parts.append(f"missing from {missing} of {frames} frame{'s' if frames != 1 else ''} (off the frame or "
                      "its edge)")
     elif missing:
@@ -7693,6 +7719,7 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
     # flux) is "soft" and never puts the comp out of the night; no reason on file = an older night
     soft = np.zeros(m.shape, dtype=bool)
     unknown = np.zeros(m.shape, dtype=bool)
+    ring = np.zeros(m.shape, dtype=bool)   # 2.4.0 cleanup (#119): missing by the one edge rule (ring past the edge)
     for f, o in enumerate(points):
         drops = getattr(o, "comp_drop", None) or {}
         for j, name in enumerate(sel):
@@ -7703,11 +7730,15 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
                 unknown[f, j] = True
             elif not _edge_drop_reason(r):
                 soft[f, j] = True
+            elif str(r) == RING_PAST_EDGE:
+                ring[f, j] = True
     rows = [math.isfinite(o.target_inst) for o in points]
     ns = night_set(m, over, rows=rows, soft=soft)
     rws = np.asarray(rows, dtype=bool) | np.isfinite(m).any(axis=1) if n else np.zeros(0, dtype=bool)
+    miss_f = ~np.isfinite(m) & ~soft & rws[:, None] if n else np.zeros(m.shape, dtype=bool)
     why = {sel[j]: night_set_reason(ns["missing"].get(j, 0), ns["over"].get(j, 0), ns["frames"],
-                                    edge=not bool((unknown[rws, j]).any()))
+                                    edge=not bool((unknown[rws, j]).any()),
+                                    ring=bool(miss_f[:, j].any()) and bool(ring[miss_f[:, j], j].all()))
            for j in set(ns["missing"]) | set(ns["over"]) if j not in ns["keep"]}
     out = [name for name in sel if name in why]
     few = [sel[j] for j in ns["few"]]
@@ -9820,7 +9851,8 @@ def suspect_score(excess: float, excess_chi2: float, factor_limit: float = SUSPE
 
 def scan_near_edge(pos, shape, sky_out: float) -> np.ndarray:
     """2.4.0 fit-in F4 (#115 edge rule, John 26 Nov): per star, True where its sky ring (out to sky_out px) runs past
-    the frame edge on this frame. pos = (n, 2) x, y; shape = the frame's (rows, cols)."""
+    the frame edge on this frame. pos = (n, 2) x, y; shape = the frame's (rows, cols). 2.4.0 cleanup (#119): the ONE
+    edge definition (sky_ring_past_edge is the same test for one star), for scan stars and comps alike."""
     p = np.asarray(pos, dtype=float).reshape(-1, 2)
     h, w = shape[:2]
     with np.errstate(invalid="ignore"):
@@ -10168,15 +10200,20 @@ def format_radec(ra_deg: float, dec_deg: float) -> str:
     return _position_name("", ra_deg, dec_deg).strip().lstrip("J")
 
 
-def channel_inst_mags(img: np.ndarray, stars: list["Star"], radius: float, sky_inner: float, sky_outer: float, exptime: float) -> np.ndarray:
-    """Instrumental magnitudes of a few stars in one debayered channel (NaN where it fails)."""
+def channel_inst_mags(img: np.ndarray, stars: list["Star"], radius: float, sky_inner: float, sky_outer: float,
+                      exptime: float, ring_rule_from: int = 0) -> np.ndarray:
+    """Instrumental magnitudes of a few stars in one debayered channel (NaN where it fails). 2.4.0 cleanup (#119):
+    stars from index ring_rule_from on follow the one edge rule (the target, index 0 of a target + comps list, keeps
+    the old aperture test: ring_rule_from=1)."""
     out = []
-    for star in stars:
+    for i_star, star in enumerate(stars):
         try:
             x, y, _ = recenter(img, star.x, star.y, radius)
-            if aperture_clip_reason(img.shape, x, y, radius, sky_inner, sky_outer):
+            if (aperture_clip_reason(img.shape, x, y, radius, sky_inner, sky_outer)
+                    or (i_star >= ring_rule_from and sky_ring_past_edge(img.shape, x, y, sky_outer))):
                 # 2.3.0 (#50, #34): a spare or watch star off the edge (or clipped) is not measured in this frame (a
                 # clipped value could later become a comp's through Use comps); it never stops the frame.
+                # 2.4.0 cleanup (#119): the one edge rule, as for the comps (a spare may become one)
                 out.append(float("nan"))
                 continue
             m = measure_aperture(img, x, y, radius, sky_inner, sky_outer)

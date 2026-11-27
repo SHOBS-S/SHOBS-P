@@ -3,7 +3,8 @@
 The main window's UI-queue drain beats every 50 ms (UIWatch.beat). A daemon thread checks the beat; when the Tk
 thread has not beaten for STALL_S seconds, the log file gets one line saying so, with the Python stack of the Tk
 thread at that moment (where it is stuck); a stall still going at LONG_S gets the stack again (has it moved?), and
-the end of every reported stall gets its length. Log file only: nothing on screen, nothing in the Findings.
+the end of every reported stall gets its length. 2.4.0 cleanup (#118): pauses of SLOW_S to STALL_S (too short for
+the stall line, but the window still froze) are counted and summed up in one line once a minute. Log file only: nothing on screen, nothing in the Findings.
 """
 import os
 import sys
@@ -12,6 +13,8 @@ import time
 import traceback
 
 STALL_S = 3.0
+SLOW_S = 1.0     # 2.4.0 cleanup (#118): shorter pauses are counted and summed up once a minute
+SLOW_EVERY_S = 60.0
 LONG_S = 10.0
 CHECK_S = 0.5
 SLEEP_S = 60.0   # the watch thread itself held up this long: the computer slept (a lock held that long is not seen)
@@ -64,10 +67,16 @@ class UIWatch:
         self._stall_start = None
         self._stop = threading.Event()
         self._last_check = None
+        self._slow: list = []            # (gap) of each 1-3 s pause since the last summary
+        self._slow_who = ""              # the other threads' innermost frames, seen during one of them
+        self._slow_since = clock()
+        self._slow_seen = None            # the beat time of the pause already looked at
 
     def beat(self):
         """Tk thread: called every 50 ms by the UI-queue drain."""
         now = self.clock()
+        if not self._said and SLOW_S <= now - self.last < self.stall_s:
+            self._slow.append(now - self.last)   # #118: a pause too short for the stall line
         if self._said:
             took = now - (self._stall_start or now)
             self.log(f"UI thread responding again after {took:.1f} s.")
@@ -113,6 +122,11 @@ class UIWatch:
                      "counting again.")
             return
         gap = now - self.last
+        if SLOW_S <= gap < self.stall_s and self._slow_seen != self.last and not self._in_question():
+            self._slow_seen = self.last          # #118: who held the window up, once per pause
+            self._slow_who = self.others_text()
+        if self._slow and now - self._slow_since >= SLOW_EVERY_S:
+            self.log(self.slow_summary())
         if gap >= self.stall_s and self._in_question():
             # F2-b: a question or file dialog is up: no stall. Count from now, so a real stall after the answer is
             # timed from the answer. A stall reported before the box opened still gets its "responding again" line.
@@ -127,6 +141,15 @@ class UIWatch:
         elif gap >= self.long_s and self._said == 1:
             self._said = 2
             self.log(f"UI thread still busy after {gap:.1f} s; it is now in:\n{self.stack_text()}")
+
+    def slow_summary(self) -> str:
+        """#118: one line for the 1-3 s pauses since the last one (then the count starts again)."""
+        n, longest, total = len(self._slow), max(self._slow), sum(self._slow)
+        who = self._slow_who
+        self._slow, self._slow_who, self._slow_since = [], "", self.clock()
+        return (f"UI thread slow: {n} pause{'s' if n != 1 else ''} of {SLOW_S:.0f}-{self.stall_s:.0f} s in the "
+                f"last minute or so (longest {longest:.1f} s, {total:.1f} s in all)"
+                + (f"; other threads during one:\n{who}" if who else "."))
 
     def _in_question(self) -> bool:
         try:

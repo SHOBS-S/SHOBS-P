@@ -22,6 +22,7 @@ import traceback
 import numpy as np
 
 import photometry_core as core
+import fit_process  # 2.4.0 cleanup (#118)
 import transit_core as tc
 
 # ---- Model for the joint fit ------------------------------------------------------------------------------------
@@ -2190,7 +2191,7 @@ class MultiNightWindow:
             out = []
             for n in todo:
                 try:
-                    out.append((n, quick_single_tc(n, planet, detrend=key), ""))
+                    out.append((n, fit_process.call(quick_single_tc, n, planet, detrend=key), ""))
                 except Exception as exc:
                     out.append((n, None, str(exc).splitlines()[0] if str(exc) else type(exc).__name__))
             app.call_ui(self._single_done, tok, out)
@@ -2293,7 +2294,8 @@ class MultiNightWindow:
 
         def work():
             try:
-                fit = joint_fit(use, planet, per_filter=pf, mcmc_steps=steps, progress=progress, cancel=cancel,
+                # 2.4.0 cleanup (#118): in the helper process, so the window keeps its speed
+                fit = fit_process.call(joint_fit, use, planet, per_filter=pf, mcmc_steps=steps, progress=progress, cancel=cancel,
                                 log=lambda m: app.call_ui(app.log, m), detrend=key)
                 app.call_ui(self._done, token, fit, None)
             except Exception as exc:
