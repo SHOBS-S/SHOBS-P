@@ -367,7 +367,7 @@ class TestSmallOnes(unittest.TestCase):
         import transit_ui
         src = inspect.getsource(transit_ui.TransitPage.fit)
         i = src.index('self.app._job_words("Fitting the transit: least-squares fit…")')
-        self.assertIn("self._notes_text([(\"info\", FIT_RUNNING)])", src[i:i + 600])
+        self.assertIn("self._notes_text([(\"info\", FIT_RUNNING)]", src[i:i + 600])   # (+ the helper note, card 1)
         self.assertNotIn("press Fit transit", transit_ui.FIT_RUNNING)
 
     def test_d_a_clicked_comp_is_logged(self):

@@ -109,6 +109,13 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "The fit helper is not running, so this fit runs in the window's own process and the window may be slow until it ends (the log file says why)."
+   ],
+   "todo": "Nothing; the results are the same. If you see it, send the log file."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Earth orientation table (IERS-A): … loaded in the background.",
     "… no download and no cached copy; using the one bundled with astropy.",
     "… not usable (…); using the one bundled with astropy."
@@ -1759,6 +1766,20 @@
     "only … px from the frame edge: its sky ring (out to … px) runs past the edge, so it would be left out of the whole night — pick a star further in"
    ],
    "todo": "Pick a star further in (for the check, the line may name a green ring S1, S2 … farther in)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 4: … Marker at (42, 696). It will not be used: drifts to the frame edge later in the night: its sky ring (out to … px) runs past the edge on frames …, so it would be left out of the whole night — pick a star further in."
+   ],
+   "todo": "Pick a star further in (right-click the comp to clear it)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series closed: its stars taken out of Comp 1, Check (they had no marker on this image)."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Photometry",

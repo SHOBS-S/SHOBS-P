@@ -97,7 +97,8 @@ New in 2.4.0 (S = shared by every mode; GitHub issue numbers in brackets)
      change on nights with a comp that drifts near the edge (HAT-P-32 b, 19 Oct: Tc moved by about a minute).
 - S  The window keeps moving during long fits [118]: the transit fit, the comp check, the robustness check and the
      multi-night fits run in a separate helper process (the same numbers, bit for bit). Before, on Windows, the
-     fit held the window up and the busy bar froze. If the helper cannot start, the fits run as before.
+     fit held the window up and the busy bar froze. If the helper cannot start, the fits run as before and the
+     Transit page says so while a fit runs.
 - V  A re-center step that looks like an aperture problem holds the series' automatic save, as a flip step does.
 
 New in 2.3.6 (messages, from the 14 Nov 2026 message review [79]; screen and file text only: every measured

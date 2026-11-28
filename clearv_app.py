@@ -13244,6 +13244,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         if self.preview is None or not self.preview_is_debayered:
             return
+        if getattr(self, "_preview_foreign", ""):
+            # 2.4.0 cleanup regression (N5): the image is another field's (a series loaded onto it): its stars say
+            # nothing about the series' aperture; the check runs on the series' own lights
+            return
         try:
             r = float(self.radius.get())
         except (TypeError, ValueError):
@@ -15017,10 +15021,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._update_pick_label()
         self.refresh_preview()
         self.update_star_panel()
+        if comp_number(mode) and self._say_watch_clash(mode):
+            # 2.4.0 cleanup regression (N3): a Watch star is refused before anything says ✓ about it
+            return
         if filled and mode != "target":
             # 2.4.0 cleanup (F4 card 5, D): a comp or check clicked is logged too (after a right-click clear the Log
             # showed only the earlier miss, "not in the downloaded catalogs", and never the new star)
-            self._slot_say(mode, ("✓ " if "=" in filled else "") + filled + snap_note, bad="=" not in filled)
+            out = self._comp_edge_unused_words(mode, xy)   # cleanup regression (N1)
+            if out:
+                self._slot_say(mode, f"⚠ {filled}{snap_note} It will not be used: {out}.", bad=True)
+            else:
+                self._slot_say(mode, ("✓ " if "=" in filled else "") + filled + snap_note, bad="=" not in filled)
         elif filled:
             self.status.set(filled + snap_note)
         elif snap_note:
@@ -15042,6 +15053,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
         self._neighbor_at_pick(mode)   # 2.4.0 fit-in F4 (m234)
+
+    def _comp_edge_unused_words(self, role: str, xy) -> str:
+        """2.4.0 cleanup regression (N1): a comp the edge rule will leave out of the whole night (its sky ring runs
+        past the edge on some frame, #119) must not be logged with a ✓: the words for its line, '' when it is fine.
+        The same test as the star panel's ⚠ (_edge_note)."""
+        if not comp_number(role) or xy is None:
+            return ""
+        try:
+            note = self._edge_note(role, xy)
+        except Exception:
+            return ""
+        if note.startswith("⚠") and "left out of the whole night" in note:
+            return note[1:].strip()
+        return ""
 
     def _comp_ring_off_frame(self, xy) -> str:
         """2.4.0 fit-in F4 (m027): a comp clicked so near the frame edge that its sky ring is off the frame on this
@@ -16142,6 +16167,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._place_finding(role, warn)
             self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), warn, True)
             self.update_star_panel()
+        elif self._say_watch_clash(role):   # 2.4.0 step 4 (S033): a comp is never a Watch star too
+            return   # (cleanup regression N3: refused before anything says ✓ about it)
+        elif self._comp_edge_unused_words(role, xy):
+            # cleanup regression (N1): HAT-P-32 b comp 4 at (42, 696) was logged "✓ … Marker at" while the star
+            # panel said it would be left out of the night
+            self._slot_say(role, f"⚠ {msg} It will not be used: {self._comp_edge_unused_words(role, xy)}.", bad=True)
         else:
             self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
         if self._say_watch_clash(role):   # 2.4.0 step 4 (S033): a comp is never a Watch star too
@@ -22076,8 +22107,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 for k, o in zip(m["frames"], m["points"]):
                     labels[k] = core.frame_label(o.path) or os.path.basename(o.path)
             line = core.short_move_text(short, frame_no=lambda k: labels.get(k, k + 1))
-            self.log(line)
-            self._run_note(line)
+            self._run_note(line)   # (cleanup regression N2: _run_note writes the Log line; a self.log here doubled it)
         return found
 
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
@@ -24912,6 +24942,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             pass
         super().destroy()
 
+    def _clear_series_slots(self):
+        """2.4.0 cleanup regression (N4): Close series empties the comp/check slots the series file filled that have
+        no marker on this image (Card 6: TYC 4006-1008-1 and TYC 4006-832-1 stayed in Comp 1 / Check on the next
+        field, 'no marker on this image'). A slot with a marker, or a name typed since, is yours and stays."""
+        brought = getattr(self, "_series_slot_names", None) or {}
+        self._series_slot_names = {}
+        cleared = []
+        for role, key in brought.items():
+            if getattr(self, f"{role}_xy", None) is None and name_key(getattr(self, f"{role}_name").get()) == key:
+                getattr(self, "_slot_notes", {}).pop(role, None)
+                self.clear_mark(role, redraw=False)
+                cleared.append(role_label(role))
+        if cleared:
+            self._update_pick_label()
+            self.refresh_preview()
+            self.update_star_panel()
+            self.log("Series closed: its stars taken out of " + ", ".join(cleared) + " (they had no marker on this "
+                     "image).")
+
     def close_series(self, asked: bool = False):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
         next run is a single night. Unsaved points are offered a save first (asked=True: the caller has offered it;
@@ -24926,6 +24975,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         had_file = bool(self.series_path)
         name = os.path.basename(self.series_path) if self.series_path else "The series"
+        self._clear_series_slots()   # 2.4.0 cleanup regression (N4)
         self.observations = []
         self._clear_series_state()
         self._take_series_snapshot()
@@ -25253,6 +25303,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log("Series loaded: markers from the previous run taken off " + ", ".join(stale)
                      + " (the series names other stars there); they are placed from the series after the solve.")
         self.highlight_night = None   # 2.2.15 review: a loaded series opens unzoomed
+        # 2.4.0 cleanup regression (N4): the comp/check names the file put in the slots, so Close series takes them
+        # away again when they have no marker (they named the closed series' stars, not this image's)
+        self._series_slot_names = {role: name_key(getattr(self, f"{role}_name").get())
+                                   for role in COMP_ROLES + ("check",)
+                                   if role not in kept_marked and getattr(self, f"{role}_name").get().strip()
+                                   and name_key(getattr(self, f"{role}_name").get()) != names_before.get(role)}
         # 2.2.15 review: remember what the file brought, so Close series takes it away again.
         self._series_watch_names = {w.get("name") for w in self.watch_list} - watch_before
         self._series_auid_keys = set(self.seq_auids) - auids_before

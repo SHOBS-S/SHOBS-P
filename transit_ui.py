@@ -1900,7 +1900,9 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self._fitting = True
             self._show_progress()
             # 2.4.0 cleanup (B, F4 card 1): while the fit runs the page no longer says "press Fit transit"
-            self._notes_text([("info", FIT_RUNNING)])
+            # 2.4.0 cleanup regression (card 1): a fit that runs in the window's process says so on the page
+            _slow = fit_process.in_window_note()
+            self._notes_text([("info", FIT_RUNNING)] + ([("info", _slow)] if _slow else []))
             if self.result is None:
                 self.draw(placeholder=FIT_RUNNING)
             app = self.app

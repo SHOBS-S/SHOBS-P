@@ -50,6 +50,16 @@ MAX_DEATHS = 2
 _closed = False
 
 
+def in_window_note() -> str:
+    """2.4.0 cleanup regression (card 1): a plain line for the page while a fit runs, when the helper is not in use
+    (it could not start, or stopped twice), so the slow window has a visible reason, not only a Log line. "" when
+    the helper is fine (or not switched on: tests, the self-test)."""
+    if not ENABLED or _closed or not _broken_why:
+        return ""
+    return ("The fit helper is not running, so this fit runs in the window's own process and the window may be slow "
+            "until it ends (the log file says why).")
+
+
 def set_logger(func) -> None:
     global _log
     _log = func
@@ -316,8 +326,30 @@ def call(func, *args, cancel=None, **kwargs):
 
 # ---- the helper's side ----------------------------------------------------------------------------------------
 
+def _windows_std_handles_off_the_pipes() -> None:
+    """2.4.0 cleanup regression (card 1): on Windows the helper never said hello. Its reader thread sat in a
+    synchronous ReadFile on the stdin pipe while the main thread imported numpy; loading numpy's compiled library
+    (its C runtime starting up looks at the process's standard handles) then waited on that same pipe for good, so the
+    window gave up after 60 s and every fit ran in the window's process again. Linux has no such lock, which is why
+    only Windows showed it. Cure: the process's standard input points at NUL and its standard output at the stderr
+    pipe (fds 0/1 and the Win32 standard handles both; a GUI pythonw's dup2 does not move the Win32 ones), so nothing
+    but our own private copies ever touches the job pipes, and a library loaded later in a fit (scipy, astropy) cannot
+    hang either."""
+    import ctypes
+    import msvcrt
+    nul = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(nul, 0)
+    os.close(nul)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.SetStdHandle.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    k32.SetStdHandle.restype = ctypes.c_int
+    k32.SetStdHandle(0xFFFFFFF6, msvcrt.get_osfhandle(0))   # STD_INPUT_HANDLE  -> NUL
+    k32.SetStdHandle(0xFFFFFFF5, msvcrt.get_osfhandle(1))   # STD_OUTPUT_HANDLE -> the stderr pipe (fd 1 = copy of 2)
+
+
 def _child_main() -> int:
-    # The pickles use the real stdout (binary); anything a library prints goes to stderr (the window's log file).
+    # The pickles use private copies of the real stdin/stdout (binary); anything a library prints goes to stderr
+    # (the window's log file), and the standard handles are moved off the job pipes (card 1, above).
     if sys.platform.startswith("win"):
         import msvcrt
         msvcrt.setmode(0, os.O_BINARY)
@@ -326,6 +358,16 @@ def _child_main() -> int:
     inp = os.fdopen(os.dup(0), "rb", buffering=0)
     os.dup2(2, 1)
     sys.stdout = sys.stderr
+    if sys.platform.startswith("win"):
+        _windows_std_handles_off_the_pipes()
+    else:
+        nul = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(nul, 0)
+        os.close(nul)
+    try:
+        sys.stdin = open(os.devnull, "r")
+    except Exception:
+        sys.stdin = None
     out_lock = threading.Lock()
 
     def send(obj):
@@ -353,13 +395,14 @@ def _child_main() -> int:
         except Exception:
             jobs.put(("quit",))         # the window's process went away
 
-    threading.Thread(target=read, daemon=True).start()
     try:
-        import numpy  # noqa: F401   (loaded now, so the first fit does not wait for it)
+        # loaded now, before anything waits on the pipe (card 1), so the first fit does not wait for them either
+        import numpy  # noqa: F401
         import transit_core  # noqa: F401
     except Exception as exc:
         send(("fail", f"{type(exc).__name__}: {exc}"))
         return 1
+    threading.Thread(target=read, daemon=True).start()
     send(("hello", os.getpid()))
     while True:
         msg = jobs.get()

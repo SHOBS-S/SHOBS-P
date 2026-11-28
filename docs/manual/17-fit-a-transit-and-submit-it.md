@@ -24,7 +24,9 @@ This chapter covers:
    points. Set the detrend and press Fit transit."* Set the detrend (and anything else) first, then press **Fit
    transit**. It needs at least 20 usable points and a planet. While the fit runs the page says *"Fitting the
    transit… the busy bar at the lower left names each step."*, and the fit runs in a helper process of its own, so
-   the window stays as quick as ever (2.4.0). The same holds after **Use comps…**, after you pick
+   the window stays as quick as ever (2.4.0). If that helper could not start, a second line says *"The fit helper is
+   not running, so this fit runs in the window's own process and the window may be slow until it ends (the log file
+   says why)."*: the results are the same, and the log file says why. The same holds after **Use comps…**, after you pick
    another night, and after you open a report. On a night reduced before 2.4.0, when one of your comps was left out of part of the night (it went off
    the frame edge, say), the line below says so first (2.4.0 leaves such a comp out of the whole night, so a night
    reduced now never shows it): *"⚠ C4 is missing in 24 frames (off the frame edge; frames
